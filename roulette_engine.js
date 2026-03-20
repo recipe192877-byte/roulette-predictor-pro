@@ -98,14 +98,41 @@ function runAnalytics() {
         return;
     }
 
-    // --- MAIN PREDICTIONS ---
-    let freq = {}, lastSeen = {};
-    spinHistory.forEach((n, i) => { freq[n] = (freq[n]||0)+1; lastSeen[n] = i; });
+    // --- MAIN PREDICTIONS (High Accuracy Engine) ---
+    let freq = {}, lastSeen = {}, transitions = {};
+    let lastNum = spinHistory[spinHistory.length - 1];
+
+    spinHistory.forEach((n, i) => { 
+        freq[n] = (freq[n]||0) + 1; 
+        lastSeen[n] = i; 
+        
+        // Markov Transitions: what historically followed the current last number?
+        if (i < spinHistory.length - 1) {
+            if (n === lastNum) {
+                let nextN = spinHistory[i+1];
+                transitions[nextN] = (transitions[nextN]||0) + 1;
+            }
+        }
+    });
     
     let scores = [];
     for(let i=0; i<=36; i++) {
-        let sc = (freq[i]||0) * 2;
-        sc += (lastSeen[i] !== undefined) ? (lastSeen[i]/1000) : 0; // recency tie-breaker
+        // Base Frequency Score
+        let sc = (freq[i]||0) * 1.5;
+        
+        // Massive Weight on Pattern Repetition (Transitions)
+        sc += (transitions[i]||0) * 4.0; 
+
+        // Wheel Geometry Heat Spread (If a number's physical neighbors are hot, it catches heat)
+        let idx = ROULETTE_NUMBERS.indexOf(i);
+        let leftN = ROULETTE_NUMBERS[(idx - 1 + 37) % 37];
+        let rightN = ROULETTE_NUMBERS[(idx + 1) % 37];
+        let neighborHeat = ((freq[leftN]||0) + (freq[rightN]||0)) * 0.5;
+        sc += neighborHeat;
+
+        // Recency tie-breaker
+        sc += (lastSeen[i] !== undefined) ? (lastSeen[i]/1000) : 0; 
+        
         scores.push({num: i, score: sc});
     }
     scores.sort((a,b) => b.score - a.score);
@@ -237,7 +264,7 @@ function updateTrends(spins) {
     });
     let dMax = Math.max(d1,d2,d3);
     let dText = "Wait";
-    if(dMax >= spins.length*(12/37) + 1.5) {
+    if(dMax > spins.length*(12/37) + 2.5) { // Stricter threshold for High Accuracy
         if(dMax===d1) dText = "<span class='text-gold'>Play 1 to 12</span>";
         else if(dMax===d2) dText = "<span class='text-gold'>Play 13 to 24</span>";
         else if(dMax===d3) dText = "<span class='text-gold'>Play 25 to 36</span>";
@@ -255,8 +282,8 @@ function updateTrends(spins) {
     
     let oMax = Math.max(r,b,e,o,l,h);
     let oText = "Wait";
-    // > 55% win rate required to call it a strong trend in short sample
-    if(oMax >= spins.length*(18/37) + 2) {
+    // > 60% win rate required to call it a strong trend to increase accuracy
+    if(oMax > spins.length*(18/37) + 3.0) {
         if(oMax===r) oText = "<span class='text-red'>Play RED</span>";
         else if(oMax===b) oText = "Play BLACK";
         else if(oMax===e) oText = "<span class='text-gold'>Play EVEN</span>";
