@@ -142,7 +142,7 @@ function runAnalytics() {
         }
         
         // Find most common distance cluster (bin of size 5)
-        let maxBinScore = 0; let bestBin = "...";
+        let maxBinScore = 0; let bestStart = -1;
         for(let start=0; start<=36; start++) {
             let hits = 0;
             distances.forEach(d => {
@@ -153,14 +153,21 @@ function runAnalytics() {
             });
             if(hits > maxBinScore) {
                 maxBinScore = hits;
-                let endLabel = (start+4)%37;
-                bestBin = `+${start} to +${endLabel}`;
+                bestStart = start;
             }
         }
         
         let sigText = "Unclear";
         if(maxBinScore >= Math.max(3, distances.length * 0.2)) {
-            sigText = `<span class="text-gold">${bestBin} pockets</span>`;
+            let lastSpun = spinHistory[spinHistory.length - 1];
+            let lastIdx = ROULETTE_NUMBERS.indexOf(lastSpun);
+            let targetNums = [];
+            for (let offset = 0; offset <= 4; offset++) {
+                let shift = (bestStart + offset) % 37;
+                let targetIdx = (lastIdx + shift) % 37;
+                targetNums.push(ROULETTE_NUMBERS[targetIdx]);
+            }
+            sigText = `<span class="text-gold" style="font-size:11px;">${targetNums.join(', ')}</span>`;
         }
         document.getElementById('dealer-sig').innerHTML = sigText;
     }
@@ -217,9 +224,9 @@ function updateTrends(spins) {
     let maxS = Math.max(vScore, tScore, oScore);
     let sText = "Wait";
     if(maxS > 1.5) {
-        if(maxS === vScore) sText = "<span class='text-gold'>Voisins</span>";
-        else if(maxS === tScore) sText = "<span class='text-gold'>Tiers</span>";
-        else sText = "<span class='text-gold'>Orphelins</span>";
+        if(maxS === vScore) sText = "<span class='text-gold'>Play Zero Area</span>";
+        else if(maxS === tScore) sText = "<span class='text-gold'>Play Opp. Zero</span>";
+        else sText = "<span class='text-gold'>Play Sides</span>";
     }
     document.getElementById('pred-sector').innerHTML = sText;
 
@@ -231,9 +238,9 @@ function updateTrends(spins) {
     let dMax = Math.max(d1,d2,d3);
     let dText = "Wait";
     if(dMax >= spins.length*(12/37) + 1.5) {
-        if(dMax===d1) dText = "<span class='text-gold'>1st 12</span>";
-        else if(dMax===d2) dText = "<span class='text-gold'>2nd 12</span>";
-        else if(dMax===d3) dText = "<span class='text-gold'>3rd 12</span>";
+        if(dMax===d1) dText = "<span class='text-gold'>Play 1 to 12</span>";
+        else if(dMax===d2) dText = "<span class='text-gold'>Play 13 to 24</span>";
+        else if(dMax===d3) dText = "<span class='text-gold'>Play 25 to 36</span>";
     }
     document.getElementById('pred-dozen').innerHTML = dText;
 
@@ -250,12 +257,12 @@ function updateTrends(spins) {
     let oText = "Wait";
     // > 55% win rate required to call it a strong trend in short sample
     if(oMax >= spins.length*(18/37) + 2) {
-        if(oMax===r) oText = "<span class='text-red'>RED</span>";
-        else if(oMax===b) oText = "BLACK";
-        else if(oMax===e) oText = "<span class='text-gold'>EVEN</span>";
-        else if(oMax===o) oText = "<span class='text-gold'>ODD</span>";
-        else if(oMax===l) oText = "<span class='text-gold'>LOW</span>";
-        else if(oMax===h) oText = "<span class='text-gold'>HIGH</span>";
+        if(oMax===r) oText = "<span class='text-red'>Play RED</span>";
+        else if(oMax===b) oText = "Play BLACK";
+        else if(oMax===e) oText = "<span class='text-gold'>Play EVEN</span>";
+        else if(oMax===o) oText = "<span class='text-gold'>Play ODD</span>";
+        else if(oMax===l) oText = "<span class='text-gold'>Play 1-18 (Low)</span>";
+        else if(oMax===h) oText = "<span class='text-gold'>Play 19-36 (High)</span>";
     }
     document.getElementById('pred-outside').innerHTML = oText;
 }
