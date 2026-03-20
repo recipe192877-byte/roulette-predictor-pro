@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Roulette Predictor Pro</title>
+    <!-- Premium Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Montserrat:wght@400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        
+        <!-- Header -->
+        <header>
+            <div class="logo">Roulette<span>PRO</span></div>
+            <button id="btn-refresh" class="btn-outline">Reset App</button>
+        </header>
+
+        <!-- Main Predictions -->
+        <section class="prediction-panel glass">
+            <h2 class="section-title">Main Prediction</h2>
+            <div class="grid-3">
+                <div class="pred-box primary-pred">
+                    <span class="lbl">Top Pick</span>
+                    <div id="pred-1" class="val">--</div>
+                </div>
+                <div class="pred-box">
+                    <span class="lbl">2nd Pick</span>
+                    <div id="pred-2" class="val">--</div>
+                </div>
+                <div class="pred-box">
+                    <span class="lbl">3rd Pick</span>
+                    <div id="pred-3" class="val">--</div>
+                </div>
+            </div>
+
+            <div class="grid-3 mt-10">
+                <div class="pred-box">
+                    <span class="lbl">Sector</span>
+                    <div id="pred-sector" class="val-sm">Wait</div>
+                </div>
+                <div class="pred-box">
+                    <span class="lbl">Dozen</span>
+                    <div id="pred-dozen" class="val-sm">Wait</div>
+                </div>
+                <div class="pred-box">
+                    <span class="lbl">Outside</span>
+                    <div id="pred-outside" class="val-sm">Wait</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Advanced Analytics -->
+        <section class="analytics-panel glass mt-10">
+            <h2 class="section-title">Pro Analytics</h2>
+            
+            <div class="grid-2">
+                <!-- Sleepers -->
+                <div class="stat-box">
+                    <span class="lbl">Top Sleepers (Cold)</span>
+                    <div id="sleepers-list" class="sleepers-val">Data Needed</div>
+                </div>
+                <!-- Dealer Signature -->
+                <div class="stat-box">
+                    <span class="lbl">Dealer Signature</span>
+                    <div id="dealer-sig" class="sig-val">Analyzing...</div>
+                </div>
+            </div>
+
+            <!-- Progress Bars -->
+            <div class="bars-container mt-10">
+                <div class="bar-group">
+                    <div class="bar-labels">
+                        <span class="text-red">RED (<span id="pct-red">0%</span>)</span>
+                        <span class="text-black">BLACK (<span id="pct-black">0%</span>)</span>
+                    </div>
+                    <div class="progress-track">
+                        <div id="bar-red" class="progress-fill bg-red" style="width: 50%;"></div>
+                    </div>
+                </div>
+
+                <div class="bar-group">
+                    <div class="bar-labels">
+                        <span>EVEN (<span id="pct-even">0%</span>)</span>
+                        <span>ODD (<span id="pct-odd">0%</span>)</span>
+                    </div>
+                    <div class="progress-track">
+                        <div id="bar-even" class="progress-fill bg-gold" style="width: 50%;"></div>
+                    </div>
+                </div>
+                
+                <div class="bar-group">
+                    <div class="bar-labels">
+                        <span>LOW (<span id="pct-low">0%</span>)</span>
+                        <span>HIGH (<span id="pct-high">0%</span>)</span>
+                    </div>
+                    <div class="progress-track">
+                        <div id="bar-low" class="progress-fill bg-blue" style="width: 50%;"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- History Tape -->
+        <section class="history-section mt-10">
+            <div class="history-header">
+                <h3>Spin History (<span id="spin-count">0</span>)</h3>
+                <div class="actions">
+                    <button id="btn-undo" class="btn-icon">&#x238C; Undo</button>
+                    <button id="btn-clear" class="btn-icon danger">&#x2715; Clear</button>
+                </div>
+            </div>
+            <div class="history-tape glass" id="history-tape">
+                <!-- Chips via JS -->
+                <div class="chip-placeholder">Input spins below</div>
+            </div>
+        </section>
+
+        <!-- Keypad -->
+        <section class="keypad-section mt-10">
+            <div class="keypad" id="keypad">
+                <button class="key num-0" data-num="0">0</button>
+                <!-- JS Gen -->
+            </div>
+        </section>
+
+    </div>
+    
+    <script src="roulette_engine.js"></script>
+</body>
+</html>
