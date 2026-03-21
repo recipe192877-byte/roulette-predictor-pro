@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Roulette Predictor Pro</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#D4AF37">
+    <link rel="apple-touch-icon" href="icon-192.svg">
     <!-- Premium Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Montserrat:wght@400;600;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
@@ -13,57 +16,75 @@
         
         <!-- Header -->
         <header>
-            <div class="logo">Roulette<span>PRO</span></div>
-            <button id="btn-refresh" class="btn-outline">Reset App</button>
+            <div class="logo">Roulette<span>PRO</span> v2</div>
+            <div class="header-controls">
+                <div class="toggle-container" id="risk-toggle" title="Risk Mode: Conservative / Aggressive">
+                    <span class="toggle-label" id="risk-label">CONS</span>
+                    <div class="toggle-track" id="risk-track"><div class="toggle-knob"></div></div>
+                </div>
+                <button id="btn-refresh" class="btn-outline">Reset</button>
+            </div>
         </header>
 
         <!-- Main Predictions -->
         <section class="prediction-panel glass">
-            <h2 class="section-title">Main Prediction</h2>
-            <div class="grid-3">
-                <div class="pred-box primary-pred">
-                    <span class="lbl">Top Pick</span>
-                    <div id="pred-1" class="val">--</div>
-                </div>
-                <div class="pred-box">
-                    <span class="lbl">2nd Pick</span>
-                    <div id="pred-2" class="val">--</div>
-                </div>
-                <div class="pred-box">
-                    <span class="lbl">3rd Pick</span>
-                    <div id="pred-3" class="val">--</div>
+            <div class="section-header">
+                <h2 class="section-title">Smart Predictions</h2>
+                <div class="bankroll-ui" title="Suggested Bet Unit">
+                    <span class="text-muted">Unit:</span> <span class="text-gold">10 Pts</span>
                 </div>
             </div>
 
-            <div class="grid-3 mt-10">
-                <div class="pred-box">
-                    <span class="lbl">Wheel Area</span>
-                    <div id="pred-sector" class="val-sm">Wait</div>
+            <!-- Single Numbers -->
+            <div class="grid-3">
+                <div class="pred-box primary-pred" id="box-pred-1">
+                    <span class="lbl">Top Pick</span>
+                    <div id="pred-1" class="val">--</div>
+                    <div id="bet-1" class="bet-amt">Wait</div>
                 </div>
-                <div class="pred-box">
+                <div class="pred-box" id="box-pred-2">
+                    <span class="lbl">2nd Pick</span>
+                    <div id="pred-2" class="val">--</div>
+                    <div id="bet-2" class="bet-amt">Wait</div>
+                </div>
+                <div class="pred-box" id="box-pred-3">
+                    <span class="lbl">3rd Pick</span>
+                    <div id="pred-3" class="val">--</div>
+                    <div id="bet-3" class="bet-amt">Wait</div>
+                </div>
+            </div>
+
+            <!-- Areas & Trends -->
+            <div class="grid-3 mt-10">
+                <div class="pred-box" id="box-sector">
+                    <span class="lbl">Wheel Sector</span>
+                    <div id="pred-sector" class="val-sm">Wait</div>
+                    <div id="bet-sector" class="bet-amt">--</div>
+                </div>
+                <div class="pred-box" id="box-dozen">
                     <span class="lbl">Dozens</span>
                     <div id="pred-dozen" class="val-sm">Wait</div>
+                    <div id="bet-dozen" class="bet-amt">--</div>
                 </div>
-                <div class="pred-box">
-                    <span class="lbl">Color/Odd-Even</span>
+                <div class="pred-box" id="box-outside">
+                    <span class="lbl">Outside</span>
                     <div id="pred-outside" class="val-sm">Wait</div>
+                    <div id="bet-outside" class="bet-amt">--</div>
                 </div>
             </div>
         </section>
 
-        <!-- Advanced Analytics -->
+        <!-- Advanced Analytics & Streaks -->
         <section class="analytics-panel glass mt-10">
-            <h2 class="section-title">Smart Betting Hints</h2>
+            <h2 class="section-title">Analytics & Streaks</h2>
             
             <div class="grid-2">
-                <!-- Sleepers -->
                 <div class="stat-box">
-                    <span class="lbl">Due Numbers (Not Seen)</span>
-                    <div id="sleepers-list" class="sleepers-val">Data Needed</div>
+                    <span class="lbl">Abnormal Streak</span>
+                    <div id="streak-alert" class="sig-val">None</div>
                 </div>
-                <!-- Dealer Signature -->
                 <div class="stat-box">
-                    <span class="lbl">Wheel Pattern (Play These)</span>
+                    <span class="lbl">Wheel Bias</span>
                     <div id="dealer-sig" class="sig-val">Analyzing...</div>
                 </div>
             </div>
@@ -79,24 +100,17 @@
                         <div id="bar-red" class="progress-fill bg-red" style="width: 50%;"></div>
                     </div>
                 </div>
-
-                <div class="bar-group">
-                    <div class="bar-labels">
-                        <span>EVEN (<span id="pct-even">0%</span>)</span>
-                        <span>ODD (<span id="pct-odd">0%</span>)</span>
-                    </div>
-                    <div class="progress-track">
-                        <div id="bar-even" class="progress-fill bg-gold" style="width: 50%;"></div>
-                    </div>
-                </div>
                 
-                <div class="bar-group">
+                <div class="bar-group mt-5">
                     <div class="bar-labels">
-                        <span>LOW (<span id="pct-low">0%</span>)</span>
-                        <span>HIGH (<span id="pct-high">0%</span>)</span>
+                        <span>1st 12 (<span id="pct-d1">0%</span>)</span>
+                        <span>2nd 12 (<span id="pct-d2">0%</span>)</span>
+                        <span>3rd 12 (<span id="pct-d3">0%</span>)</span>
                     </div>
-                    <div class="progress-track">
-                        <div id="bar-low" class="progress-fill bg-blue" style="width: 50%;"></div>
+                    <div class="progress-track flex-track">
+                        <div id="bar-d1" class="progress-fill bg-blue" style="width: 33.3%;"></div>
+                        <div id="bar-d2" class="progress-fill bg-gold" style="width: 33.3%;"></div>
+                        <div id="bar-d3" class="progress-fill bg-green" style="width: 33.3%;"></div>
                     </div>
                 </div>
             </div>
@@ -112,7 +126,6 @@
                 </div>
             </div>
             <div class="history-tape glass" id="history-tape">
-                <!-- Chips via JS -->
                 <div class="chip-placeholder">Input spins below</div>
             </div>
         </section>
@@ -128,5 +141,10 @@
     </div>
     
     <script src="roulette_engine.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js');
+        }
+    </script>
 </body>
 </html>
