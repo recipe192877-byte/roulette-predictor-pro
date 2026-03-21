@@ -24,6 +24,10 @@
                     <span class="toggle-label" id="risk-label">CONS</span>
                     <div class="toggle-track" id="risk-track"><div class="toggle-knob"></div></div>
                 </div>
+                <div class="toggle-container" id="prog-toggle" title="Progression: Martingale / Fibonacci">
+                    <span class="toggle-label" id="prog-label">MART</span>
+                    <div class="toggle-track" id="prog-track"><div class="toggle-knob"></div></div>
+                </div>
                 <button id="btn-refresh" class="btn-outline">Reset</button>
             </div>
         </header>
@@ -72,6 +76,25 @@
                     <span class="lbl">Outside</span>
                     <div id="pred-outside" class="val-sm">Wait</div>
                     <div id="bet-outside" class="bet-amt">--</div>
+                </div>
+            </div>
+
+            <!-- European Sectors (French Bets) -->
+            <div class="grid-3 mt-10">
+                <div class="pred-box" id="box-voisins">
+                    <span class="lbl">Voisins</span>
+                    <div id="pred-voisins" class="val-sm">Wait</div>
+                    <div id="bet-voisins" class="bet-amt">--</div>
+                </div>
+                <div class="pred-box" id="box-tiers">
+                    <span class="lbl">Tiers</span>
+                    <div id="pred-tiers" class="val-sm">Wait</div>
+                    <div id="bet-tiers" class="bet-amt">--</div>
+                </div>
+                <div class="pred-box" id="box-orphelins">
+                    <span class="lbl">Orphelins</span>
+                    <div id="pred-orphelins" class="val-sm">Wait</div>
+                    <div id="bet-orphelins" class="bet-amt">--</div>
                 </div>
             </div>
         </section>

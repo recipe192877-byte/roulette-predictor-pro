@@ -9,7 +9,9 @@ const ORPHELINS = [1, 20, 14, 31, 9, 17, 34, 6];
 let spinHistory = [];
 const MAX_HISTORY = 200;
 let isAggressive = false;
+let isFibonacci = false;
 const BASE_UNIT = 10;
+const FIB = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233];
 let isVoiceEnabled = false;
 let pnlChartInstance = null;
 
@@ -47,6 +49,20 @@ function init() {
         updateApp();
     });
 
+    // Progression Toggle Logic
+    let progLbl = document.getElementById('prog-label');
+    document.getElementById('prog-track').classList.toggle('active', isFibonacci);
+    progLbl.innerText = isFibonacci ? 'FIBO' : 'MART';
+    progLbl.classList.toggle('active', isFibonacci);
+
+    document.getElementById('prog-toggle').addEventListener('click', () => {
+        isFibonacci = !isFibonacci;
+        document.getElementById('prog-track').classList.toggle('active', isFibonacci);
+        progLbl.innerText = isFibonacci ? 'FIBO' : 'MART';
+        progLbl.classList.toggle('active', isFibonacci);
+        updateApp();
+    });
+
     initVoice();
     updateApp();
 }
@@ -60,6 +76,9 @@ function loadState() {
         }
         let savedRisk = localStorage.getItem('rppro_risk');
         if(savedRisk !== null) isAggressive = (savedRisk === 'true');
+        
+        let savedProg = localStorage.getItem('rppro_prog');
+        if(savedProg !== null) isFibonacci = (savedProg === 'true');
     } catch(e) { console.error("Could not load state", e); }
 }
 
@@ -67,6 +86,7 @@ function saveState() {
     try {
         localStorage.setItem('rppro_history', JSON.stringify(spinHistory));
         localStorage.setItem('rppro_risk', isAggressive);
+        localStorage.setItem('rppro_prog', isFibonacci);
     } catch(e) { console.error("Could not save state", e); }
 }
 
@@ -194,11 +214,16 @@ function resetUI() {
         document.getElementById(`box-pred-${i}`).classList.remove('active-bet');
     });
     
-    ['column', 'dozen', 'outside'].forEach(id => {
-        document.getElementById(`pred-${id}`).innerHTML = 'Need 5+';
-        document.getElementById(`bet-${id}`).innerHTML = '--';
-        document.getElementById(`bet-${id}`).className = 'bet-amt mt-5';
-        document.getElementById(`box-${id}`).classList.remove('active-bet');
+    ['column', 'dozen', 'outside', 'voisins', 'tiers', 'orphelins'].forEach(id => {
+        let pEl = document.getElementById(`pred-${id}`);
+        let bEl = document.getElementById(`bet-${id}`);
+        let bxEl = document.getElementById(`box-${id}`);
+        if(pEl) pEl.innerHTML = 'Need 5+';
+        if(bEl) {
+            bEl.innerHTML = '--';
+            bEl.className = 'bet-amt mt-5';
+        }
+        if(bxEl) bxEl.classList.remove('active-bet');
     });
 
     document.getElementById('streak-alert').innerHTML = 'None';
@@ -229,11 +254,17 @@ function satisfiesPrediction(n, pred) {
     if(plainPred.includes('ODD') && n%2!==0 && n!==0) return true;
     if(plainPred.includes('Low') && n>=1 && n<=18) return true;
     if(plainPred.includes('High') && n>=19 && n<=36) return true;
+    
+    // French Bets
+    if(plainPred.includes('Voisins') && VOISINS.includes(n)) return true;
+    if(plainPred.includes('Tiers') && TIERS.includes(n)) return true;
+    if(plainPred.includes('Orphelins') && ORPHELINS.includes(n)) return true;
+    
     return false;
 }
 
 function getPredictionsForHistory(historySlice) {
-    if(historySlice.length < 5) return { col: 'Wait', doz: 'Wait', out: 'Wait' };
+    if(historySlice.length < 5) return { col: 'Wait', doz: 'Wait', out: 'Wait', french: { v: 'Wait', t: 'Wait', o: 'Wait' } };
     
     // Using Standard Deviation to find statistically significant hot/cold bets
     const N = historySlice.length;
@@ -310,7 +341,24 @@ function getPredictionsForHistory(historySlice) {
         oText = devs[0].name;
     }
 
-    return { col: cText, doz: dText, out: oText };
+    // French Bets
+    let v=0, t=0, o_cnt=0;
+    historySlice.forEach(n => {
+        if(VOISINS.includes(n)) v++;
+        else if(TIERS.includes(n)) t++;
+        else if(ORPHELINS.includes(n)) o_cnt++;
+    });
+
+    const expectedV = N * (17/37); const sdV = Math.sqrt(N * (17/37) * (20/37));
+    const expectedT = N * (12/37); const sdT = Math.sqrt(N * (12/37) * (25/37));
+    const expectedO = N * (8/37);  const sdO = Math.sqrt(N * (8/37) * (29/37));
+
+    let fText = { v: 'Wait', t: 'Wait', o: 'Wait' };
+    if(v > expectedV + sdThresh*sdV*0.8) fText.v = "<span class='text-gold'>Play Voisins</span>";
+    if(t > expectedT + sdThresh*sdT*0.8) fText.t = "<span class='text-blue'>Play Tiers</span>";
+    if(o_cnt > expectedO + sdThresh*sdO*0.8) fText.o = "<span class='text-green'>Play Orphelins</span>";
+
+    return { col: cText, doz: dText, out: oText, french: fText };
 }
 
 function calculatePnL(spins) {
@@ -318,7 +366,7 @@ function calculatePnL(spins) {
     let balance = 0;
     let bHist = [0];
     
-    let prog = { column: 0, dozen: 0, outside: 0 };
+    let prog = { column: 0, dozen: 0, outside: 0, v: 0, t: 0, o: 0 };
     for(let i = 5; i < spins.length; i++) {
         let hAtPoint = spins.slice(0, i);
         let preds = getPredictionsForHistory(hAtPoint);
@@ -328,33 +376,52 @@ function calculatePnL(spins) {
         let stepWin = 0;
         
         if(preds.col !== 'Wait') {
-            let amt = Math.ceil(BASE_UNIT * Math.pow(1.5, prog.column));
-            if(amt > 10) amt = Math.round(amt/5)*5;
+            let amt = isFibonacci ? BASE_UNIT * FIB[Math.min(prog.column, FIB.length - 1)] : Math.ceil(BASE_UNIT * Math.pow(1.5, prog.column));
+            if(amt > 10 && !isFibonacci) amt = Math.round(amt/5)*5;
             stepCost += amt;
             if(satisfiesPrediction(actual, preds.col)) {
                 stepWin += (amt * 3);
                 prog.column = 0;
-            } else prog.column = Math.min(prog.column + 1, 5);
+            } else prog.column = Math.min(prog.column + 1, 8);
         }
         
         if(preds.doz !== 'Wait') {
-            let amt = Math.ceil(BASE_UNIT * Math.pow(1.5, prog.dozen));
-            if(amt > 10) amt = Math.round(amt/5)*5;
+            let amt = isFibonacci ? BASE_UNIT * FIB[Math.min(prog.dozen, FIB.length - 1)] : Math.ceil(BASE_UNIT * Math.pow(1.5, prog.dozen));
+            if(amt > 10 && !isFibonacci) amt = Math.round(amt/5)*5;
             stepCost += amt;
             if(satisfiesPrediction(actual, preds.doz)) {
                 stepWin += (amt * 3);
                 prog.dozen = 0;
-            } else prog.dozen = Math.min(prog.dozen + 1, 5);
+            } else prog.dozen = Math.min(prog.dozen + 1, 8);
         }
         
         if(preds.out !== 'Wait') {
-            let amt = Math.ceil(BASE_UNIT * Math.pow(2.0, prog.outside));
-            if(amt > 10) amt = Math.round(amt/5)*5;
+            let amt = isFibonacci ? BASE_UNIT * FIB[Math.min(prog.outside, FIB.length - 1)] : Math.ceil(BASE_UNIT * Math.pow(2.0, prog.outside));
+            if(amt > 10 && !isFibonacci) amt = Math.round(amt/5)*5;
             stepCost += amt;
             if(satisfiesPrediction(actual, preds.out)) {
                 stepWin += (amt * 2);
                 prog.outside = 0;
-            } else prog.outside = Math.min(prog.outside + 1, 6);
+            } else prog.outside = Math.min(prog.outside + 1, 10);
+        }
+
+        if(preds.french.v !== 'Wait') {
+            let amt = isFibonacci ? BASE_UNIT * FIB[Math.min(prog.v, FIB.length - 1)] : BASE_UNIT * (prog.v + 1);
+            stepCost += amt;
+            if(satisfiesPrediction(actual, preds.french.v)) { stepWin += (amt * 2); prog.v = 0; }
+            else prog.v = Math.min(prog.v + 1, 8);
+        }
+        if(preds.french.t !== 'Wait') {
+            let amt = isFibonacci ? BASE_UNIT * FIB[Math.min(prog.t, FIB.length - 1)] : BASE_UNIT * (prog.t + 1);
+            stepCost += amt;
+            if(satisfiesPrediction(actual, preds.french.t)) { stepWin += (amt * 3); prog.t = 0; }
+            else prog.t = Math.min(prog.t + 1, 8);
+        }
+        if(preds.french.o !== 'Wait') {
+            let amt = isFibonacci ? BASE_UNIT * FIB[Math.min(prog.o, FIB.length - 1)] : BASE_UNIT * (prog.o + 1);
+            stepCost += amt;
+            if(satisfiesPrediction(actual, preds.french.o)) { stepWin += (amt * 4); prog.o = 0; }
+            else prog.o = Math.min(prog.o + 1, 8);
         }
         
         balance = balance - stepCost + stepWin;
@@ -415,7 +482,7 @@ function runAnalyticsAndBetting() {
     }
 
     // 1. Calculate Progression
-    let prog = { column: 0, dozen: 0, outside: 0 };
+    let prog = { column: 0, dozen: 0, outside: 0, v: 0, t: 0, o: 0 };
     for(let i = 5; i < spinHistory.length; i++) {
         let historyAtThatPoint = spinHistory.slice(0, i);
         let preds = getPredictionsForHistory(historyAtThatPoint);
@@ -423,36 +490,63 @@ function runAnalyticsAndBetting() {
         
         if(preds.col !== 'Wait') {
             if(satisfiesPrediction(actualHit, preds.col)) prog.column = 0;
-            else prog.column = Math.min(prog.column + 1, 5);
+            else prog.column = Math.min(prog.column + 1, 8);
         }
         if(preds.doz !== 'Wait') {
             if(satisfiesPrediction(actualHit, preds.doz)) prog.dozen = 0;
-            else prog.dozen = Math.min(prog.dozen + 1, 5);
+            else prog.dozen = Math.min(prog.dozen + 1, 8);
         }
         if(preds.out !== 'Wait') {
             if(satisfiesPrediction(actualHit, preds.out)) prog.outside = 0;
-            else prog.outside = Math.min(prog.outside + 1, 6);
+            else prog.outside = Math.min(prog.outside + 1, 10);
+        }
+        if(preds.french.v !== 'Wait') {
+            if(satisfiesPrediction(actualHit, preds.french.v)) prog.v = 0;
+            else prog.v = Math.min(prog.v + 1, 8);
+        }
+        if(preds.french.t !== 'Wait') {
+            if(satisfiesPrediction(actualHit, preds.french.t)) prog.t = 0;
+            else prog.t = Math.min(prog.t + 1, 8);
+        }
+        if(preds.french.o !== 'Wait') {
+            if(satisfiesPrediction(actualHit, preds.french.o)) prog.o = 0;
+            else prog.o = Math.min(prog.o + 1, 8);
         }
     }
 
     // 2. Current Predictions
     let currentPreds = getPredictionsForHistory(spinHistory);
     let areas = [
-        { id: 'column', html: currentPreds.col, p: prog.column, mult: 1.5 },
-        { id: 'dozen', html: currentPreds.doz, p: prog.dozen, mult: 1.5 },
-        { id: 'outside', html: currentPreds.out, p: prog.outside, mult: 2.0 }
+        { id: 'column', html: currentPreds.col, p: prog.column, mult: 1.5, type: 'math' },
+        { id: 'dozen', html: currentPreds.doz, p: prog.dozen, mult: 1.5, type: 'math' },
+        { id: 'outside', html: currentPreds.out, p: prog.outside, mult: 2.0, type: 'math' },
+        { id: 'voisins', html: currentPreds.french.v, p: prog.v, mult: 1.0, type: 'flat' },
+        { id: 'tiers', html: currentPreds.french.t, p: prog.t, mult: 1.0, type: 'flat' },
+        { id: 'orphelins', html: currentPreds.french.o, p: prog.o, mult: 1.0, type: 'flat' }
     ];
 
     let spokenAlerts = [];
 
     areas.forEach(ar => {
-        document.getElementById(`pred-${ar.id}`).innerHTML = ar.html;
+        let pEl = document.getElementById(`pred-${ar.id}`);
         let box = document.getElementById(`box-${ar.id}`);
         let betEl = document.getElementById(`bet-${ar.id}`);
         
+        if(!pEl) return;
+        pEl.innerHTML = ar.html;
+        
         if(ar.html !== 'Wait') {
-            let bet = Math.ceil(BASE_UNIT * Math.pow(ar.mult, ar.p));
-            if(bet > 10) bet = Math.round(bet/5)*5;
+            let bet = 0;
+            if(isFibonacci) {
+                bet = BASE_UNIT * FIB[Math.min(ar.p, FIB.length - 1)];
+            } else {
+                if(ar.type === 'math') {
+                    bet = Math.ceil(BASE_UNIT * Math.pow(ar.mult, ar.p));
+                    if(bet > 10) bet = Math.round(bet/5)*5;
+                } else {
+                    bet = BASE_UNIT * (ar.p + 1);
+                }
+            }
             
             betEl.innerHTML = `Bet ${bet} Pts`;
             betEl.className = 'bet-amt hot mt-5';
@@ -533,6 +627,7 @@ function runAnalyticsAndBetting() {
             betEl.innerHTML = 'Wait';
             betEl.className = 'bet-amt';
             box.classList.remove('active-bet');
+            box.classList.remove('highly-confident-bet');
         }
     }
 
@@ -639,18 +734,31 @@ async function fetchMLUpdate() {
                    let box = document.getElementById(`box-pred-${i}`);
                    let betEl = document.getElementById(`bet-${i}`);
                    let conf = data.confidence;
+                   
+                   // ML Confidence overrides
                    let thresh = isAggressive ? 1.5 : 2.5; 
                    if(conf > thresh) {
                        betEl.innerHTML = `Bet ${BASE_UNIT} Pts`;
                        betEl.className = 'bet-amt hot';
                        box.classList.add('active-bet');
+                       
+                       // Premium Glow if confidence is very high
+                       if(conf > 70) {
+                           box.classList.add('highly-confident-bet');
+                           el.classList.add('text-cyan');
+                       } else {
+                           box.classList.remove('highly-confident-bet');
+                           el.classList.remove('text-cyan');
+                       }
                    } else {
                        betEl.innerHTML = 'Wait';
                        betEl.className = 'bet-amt';
                        box.classList.remove('active-bet');
+                       box.classList.remove('highly-confident-bet');
+                       el.classList.remove('text-cyan');
                    }
                }
-               document.getElementById('dealer-sig').innerHTML = `<span class='text-green' style='font-size:11px'>ML Online</span>`;
+               document.getElementById('dealer-sig').innerHTML = `<span class='text-cyan' style='font-size:11px'>ML: ${data.model.substring(0,25)}</span>`;
            }
        }
    } catch(e) {
