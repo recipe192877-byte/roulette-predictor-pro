@@ -235,7 +235,17 @@ function satisfiesPrediction(n, pred) {
 function getPredictionsForHistory(historySlice) {
     if(historySlice.length < 5) return { col: 'Wait', doz: 'Wait', out: 'Wait' };
     
-    const thresholdMult = isAggressive ? 0.7 : 1.3;
+    // Using Standard Deviation to find statistically significant hot/cold bets
+    const N = historySlice.length;
+    // For 1/3 bets (Columns, Dozens): expected = N*(12/37), SD = sqrt(N * p * q) = sqrt(N * (12/37) * (25/37))
+    const expectedThird = N * (12/37);
+    const sdThird = Math.sqrt(N * (12/37) * (25/37));
+    
+    // For 1/2 bets (Outside): expected = N*(18/37), SD = sqrt(N * (18/37) * (19/37))
+    const expectedHalf = N * (18/37);
+    const sdHalf = Math.sqrt(N * (18/37) * (19/37));
+
+    const sdThresh = isAggressive ? 1.0 : 1.5;
     
     // Columns
     let c1=0, c2=0, c3=0;
@@ -243,12 +253,19 @@ function getPredictionsForHistory(historySlice) {
         if(n===0) return;
         if(n%3===1) c1++; else if(n%3===2) c2++; else if(n%3===0) c3++;
     });
-    let cMax = Math.max(c1,c2,c3);
+    
     let cText = "Wait";
-    if(cMax > historySlice.length*(12/37) + (2.5 * thresholdMult)) { 
-        if(cMax===c1) cText = "<span class='text-blue'>Play Col 1</span>";
-        else if(cMax===c2) cText = "<span class='text-gold'>Play Col 2</span>";
-        else if(cMax===c3) cText = "<span class='text-green'>Play Col 3</span>";
+    // Check if any column is "Hot" (Hits > Expected + SD)
+    if(c1 > expectedThird + sdThresh*sdThird) cText = "<span class='text-blue'>Play Col 1</span>";
+    else if(c2 > expectedThird + sdThresh*sdThird) cText = "<span class='text-gold'>Play Col 2</span>";
+    else if(c3 > expectedThird + sdThresh*sdThird) cText = "<span class='text-green'>Play Col 3</span>";
+    // Alternatively check if "Due/Cold" (Hits < Expected - SD) if we want a mean reversion strategy?
+    // Let's stick to hot for columns for now, or pick the hottest.
+    else {
+        let maxC = Math.max(c1, c2, c3);
+        if(maxC === c1 && c1 > expectedThird + 0.5*sdThird) cText = "<span class='text-blue'>Play Col 1</span>";
+        else if(maxC === c2 && c2 > expectedThird + 0.5*sdThird) cText = "<span class='text-gold'>Play Col 2</span>";
+        else if(maxC === c3 && c3 > expectedThird + 0.5*sdThird) cText = "<span class='text-green'>Play Col 3</span>";
     }
 
     // Dozens
@@ -256,12 +273,15 @@ function getPredictionsForHistory(historySlice) {
     historySlice.forEach(n => {
         if(n>=1 && n<=12) d1++; else if(n>=13 && n<=24) d2++; else if(n>=25 && n<=36) d3++;
     });
-    let dMax = Math.max(d1,d2,d3);
     let dText = "Wait";
-    if(dMax > historySlice.length*(12/37) + (2.5 * thresholdMult)) { 
-        if(dMax===d1) dText = "<span class='text-blue'>Play 1 to 12</span>";
-        else if(dMax===d2) dText = "<span class='text-gold'>Play 13 to 24</span>";
-        else if(dMax===d3) dText = "<span class='text-green'>Play 25 to 36</span>";
+    if(d1 > expectedThird + sdThresh*sdThird) dText = "<span class='text-blue'>Play 1 to 12</span>";
+    else if(d2 > expectedThird + sdThresh*sdThird) dText = "<span class='text-gold'>Play 13 to 24</span>";
+    else if(d3 > expectedThird + sdThresh*sdThird) dText = "<span class='text-green'>Play 25 to 36</span>";
+    else {
+        let maxD = Math.max(d1, d2, d3);
+        if(maxD === d1 && d1 > expectedThird + 0.5*sdThird) dText = "<span class='text-blue'>Play 1 to 12</span>";
+        else if(maxD === d2 && d2 > expectedThird + 0.5*sdThird) dText = "<span class='text-gold'>Play 13 to 24</span>";
+        else if(maxD === d3 && d3 > expectedThird + 0.5*sdThird) dText = "<span class='text-green'>Play 25 to 36</span>";
     }
 
     // Outside
@@ -272,15 +292,22 @@ function getPredictionsForHistory(historySlice) {
         if(n%2===0) e++; else o++;
         if(n<=18) l++; else h++;
     });
-    let oMax = Math.max(r,b,e,o,l,h);
+    
+    let outScore = 0;
     let oText = "Wait";
-    if(oMax > historySlice.length*(18/37) + (3.0 * thresholdMult)) {
-        if(oMax===r) oText = "<span class='text-red'>Play RED</span>";
-        else if(oMax===b) oText = "Play BLACK";
-        else if(oMax===e) oText = "<span class='text-gold'>Play EVEN</span>";
-        else if(oMax===o) oText = "<span class='text-gold'>Play ODD</span>";
-        else if(oMax===l) oText = "<span class='text-blue'>Play 1-18 (Low)</span>";
-        else if(oMax===h) oText = "<span class='text-green'>Play 19-36 (High)</span>";
+    // Find the most statistically significant deviation
+    const devs = [
+        {name: "<span class='text-red'>Play RED</span>", hits: r},
+        {name: "Play BLACK", hits: b},
+        {name: "<span class='text-gold'>Play EVEN</span>", hits: e},
+        {name: "<span class='text-gold'>Play ODD</span>", hits: o},
+        {name: "<span class='text-blue'>Play 1-18 (Low)</span>", hits: l},
+        {name: "<span class='text-green'>Play 19-36 (High)</span>", hits: h}
+    ];
+    
+    devs.sort((a,b) => b.hits - a.hits);
+    if(devs[0].hits > expectedHalf + (sdThresh * sdHalf * 0.8)) {
+        oText = devs[0].name;
     }
 
     return { col: cText, doz: dText, out: oText };
@@ -444,32 +471,46 @@ function runAnalyticsAndBetting() {
         speakText(spokenAlerts[spokenAlerts.length - 1]);
     }
 
-    // 3. Single Numbers
-    let freq = {}, lastSeen = {}, transitions = {};
-    let lastNum = spinHistory[spinHistory.length - 1];
+    // 3. Single Numbers via Exponential Moving Average + Momentum
+    let scores = [];
+    let N = spinHistory.length;
+    let lastNum = spinHistory[N - 1];
 
-    spinHistory.forEach((n, i) => { 
-        freq[n] = (freq[n]||0) + 1; 
-        lastSeen[n] = i; 
-        if(i < spinHistory.length - 1) {
-            if(n === lastNum) {
-                let nextN = spinHistory[i+1];
-                transitions[nextN] = (transitions[nextN]||0) + 1;
+    for(let i=0; i<=36; i++) {
+        let sc = 0;
+        
+        // Momentum & Recency (decaying weight)
+        for(let j=0; j<N; j++) {
+            if(spinHistory[j] === i) {
+                // More recent hits give higher scores (exponential decay)
+                sc += Math.pow(1.05, (j - N + 20)); // Focuses on last 20 spins heavily
             }
         }
-    });
-    
-    let scores = [];
-    for(let i=0; i<=36; i++) {
-        let sc = (freq[i]||0) * 1.5;
-        sc += (transitions[i]||0) * 4.0; 
+        
+        // Transition Bonus
+        for(let j=0; j<N-1; j++) {
+            if(spinHistory[j] === lastNum && spinHistory[j+1] === i) {
+                sc += 2.0;
+            }
+        }
+        
+        // Wheel Neighbors Synergy
         let idx = ROULETTE_NUMBERS.indexOf(i);
         let leftN = ROULETTE_NUMBERS[(idx - 1 + 37) % 37];
         let rightN = ROULETTE_NUMBERS[(idx + 1) % 37];
-        sc += ((freq[leftN]||0) + (freq[rightN]||0)) * 0.5;
-        sc += (lastSeen[i] !== undefined) ? (lastSeen[i]/1000) : 0; 
+        let left2 = ROULETTE_NUMBERS[(idx - 2 + 37) % 37];
+        let right2 = ROULETTE_NUMBERS[(idx + 2) % 37];
+        
+        let neighborHits = 0;
+        let recent10 = spinHistory.slice(-10);
+        recent10.forEach(rn => {
+            if([leftN, rightN, left2, right2].includes(rn)) neighborHits++;
+        });
+        sc += neighborHits * 0.5;
+
         scores.push({num: i, score: sc});
     }
+    
     scores.sort((a,b) => b.score - a.score);
     
     for(let i=1; i<=3; i++) {
@@ -483,7 +524,7 @@ function runAnalyticsAndBetting() {
         let box = document.getElementById(`box-pred-${i}`);
         let betEl = document.getElementById(`bet-${i}`);
         
-        let thresh = isAggressive ? 1.5 : 2.5; 
+        let thresh = isAggressive ? 1.0 : 1.8; 
         if(scoreVal > thresh) {
             betEl.innerHTML = `Bet ${BASE_UNIT} Pts`;
             betEl.className = 'bet-amt hot';
@@ -580,7 +621,7 @@ function runAnalyticsAndBetting() {
 
 async function fetchMLUpdate() {
    try {
-       let res = await fetch('http://127.0.0.1:5000/predict', {
+       let res = await fetch('http://localhost:5000/predict', {
            method: 'POST',
            headers: {'Content-Type': 'application/json'},
            body: JSON.stringify({ spins: spinHistory })
@@ -613,7 +654,7 @@ async function fetchMLUpdate() {
            }
        }
    } catch(e) {
-       // Silent fail for offline PWA operation
+       console.error("ML Fetch Error: ", e);
    }
 }
 
