@@ -194,7 +194,7 @@ function resetUI() {
         document.getElementById(`box-pred-${i}`).classList.remove('active-bet');
     });
     
-    ['sector', 'dozen', 'outside'].forEach(id => {
+    ['column', 'dozen', 'outside'].forEach(id => {
         document.getElementById(`pred-${id}`).innerHTML = 'Need 5+';
         document.getElementById(`bet-${id}`).innerHTML = '--';
         document.getElementById(`bet-${id}`).className = 'bet-amt mt-5';
@@ -217,9 +217,9 @@ function resetUI() {
 function satisfiesPrediction(n, pred) {
     if(!pred || pred === 'Wait') return false;
     let plainPred = pred.replace(/<[^>]*>?/gm, ''); 
-    if(plainPred.includes('Zero') && VOISINS.includes(n)) return true;
-    if(plainPred.includes('Opp.') && TIERS.includes(n)) return true;
-    if(plainPred.includes('Sides') && ORPHELINS.includes(n)) return true;
+    if(plainPred.includes('Col 1') && n!==0 && n%3===1) return true;
+    if(plainPred.includes('Col 2') && n!==0 && n%3===2) return true;
+    if(plainPred.includes('Col 3') && n!==0 && n%3===0) return true;
     if(plainPred.includes('1 to 12') && n>=1 && n<=12) return true;
     if(plainPred.includes('13 to 24') && n>=13 && n<=24) return true;
     if(plainPred.includes('25 to 36') && n>=25 && n<=36) return true;
@@ -233,26 +233,22 @@ function satisfiesPrediction(n, pred) {
 }
 
 function getPredictionsForHistory(historySlice) {
-    if(historySlice.length < 5) return { sec: 'Wait', doz: 'Wait', out: 'Wait' };
+    if(historySlice.length < 5) return { col: 'Wait', doz: 'Wait', out: 'Wait' };
     
     const thresholdMult = isAggressive ? 0.7 : 1.3;
     
-    // Sector
-    let vHits=0, tHits=0, oHits=0;
+    // Columns
+    let c1=0, c2=0, c3=0;
     historySlice.forEach(n => {
-        if(VOISINS.includes(n)) vHits++;
-        else if(TIERS.includes(n)) tHits++;
-        else if(ORPHELINS.includes(n)) oHits++;
+        if(n===0) return;
+        if(n%3===1) c1++; else if(n%3===2) c2++; else if(n%3===0) c3++;
     });
-    let vDiff = vHits - (historySlice.length * (17/37));
-    let tDiff = tHits - (historySlice.length * (12/37));
-    let oDiff = oHits - (historySlice.length * (8/37));
-    let maxS = Math.max(vDiff, tDiff, oDiff);
-    let sText = "Wait";
-    if(maxS > (1.5 * thresholdMult)) {
-        if(maxS === vDiff) sText = "<span class='text-gold'>Play Zero Area</span>";
-        else if(maxS === tDiff) sText = "<span class='text-gold'>Play Opp. Zero</span>";
-        else sText = "<span class='text-gold'>Play Sides</span>";
+    let cMax = Math.max(c1,c2,c3);
+    let cText = "Wait";
+    if(cMax > historySlice.length*(12/37) + (2.5 * thresholdMult)) { 
+        if(cMax===c1) cText = "<span class='text-blue'>Play Col 1</span>";
+        else if(cMax===c2) cText = "<span class='text-gold'>Play Col 2</span>";
+        else if(cMax===c3) cText = "<span class='text-green'>Play Col 3</span>";
     }
 
     // Dozens
@@ -287,7 +283,7 @@ function getPredictionsForHistory(historySlice) {
         else if(oMax===h) oText = "<span class='text-green'>Play 19-36 (High)</span>";
     }
 
-    return { sec: sText, doz: dText, out: oText };
+    return { col: cText, doz: dText, out: oText };
 }
 
 function calculatePnL(spins) {
@@ -295,7 +291,7 @@ function calculatePnL(spins) {
     let balance = 0;
     let bHist = [0];
     
-    let prog = { dozen: 0, outside: 0 };
+    let prog = { column: 0, dozen: 0, outside: 0 };
     for(let i = 5; i < spins.length; i++) {
         let hAtPoint = spins.slice(0, i);
         let preds = getPredictionsForHistory(hAtPoint);
@@ -303,6 +299,16 @@ function calculatePnL(spins) {
         
         let stepCost = 0;
         let stepWin = 0;
+        
+        if(preds.col !== 'Wait') {
+            let amt = Math.ceil(BASE_UNIT * Math.pow(1.5, prog.column));
+            if(amt > 10) amt = Math.round(amt/5)*5;
+            stepCost += amt;
+            if(satisfiesPrediction(actual, preds.col)) {
+                stepWin += (amt * 3);
+                prog.column = 0;
+            } else prog.column = Math.min(prog.column + 1, 5);
+        }
         
         if(preds.doz !== 'Wait') {
             let amt = Math.ceil(BASE_UNIT * Math.pow(1.5, prog.dozen));
@@ -382,15 +388,15 @@ function runAnalyticsAndBetting() {
     }
 
     // 1. Calculate Progression
-    let prog = { sector: 0, dozen: 0, outside: 0 };
+    let prog = { column: 0, dozen: 0, outside: 0 };
     for(let i = 5; i < spinHistory.length; i++) {
         let historyAtThatPoint = spinHistory.slice(0, i);
         let preds = getPredictionsForHistory(historyAtThatPoint);
         let actualHit = spinHistory[i];
         
-        if(preds.sec !== 'Wait') {
-            if(satisfiesPrediction(actualHit, preds.sec)) prog.sector = 0;
-            else prog.sector = Math.min(prog.sector + 1, 5);
+        if(preds.col !== 'Wait') {
+            if(satisfiesPrediction(actualHit, preds.col)) prog.column = 0;
+            else prog.column = Math.min(prog.column + 1, 5);
         }
         if(preds.doz !== 'Wait') {
             if(satisfiesPrediction(actualHit, preds.doz)) prog.dozen = 0;
@@ -405,7 +411,7 @@ function runAnalyticsAndBetting() {
     // 2. Current Predictions
     let currentPreds = getPredictionsForHistory(spinHistory);
     let areas = [
-        { id: 'sector', html: currentPreds.sec, p: prog.sector, mult: 2.0 },
+        { id: 'column', html: currentPreds.col, p: prog.column, mult: 1.5 },
         { id: 'dozen', html: currentPreds.doz, p: prog.dozen, mult: 1.5 },
         { id: 'outside', html: currentPreds.out, p: prog.outside, mult: 2.0 }
     ];
