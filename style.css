@@ -92,8 +92,17 @@ header {
     font-weight: 600;
     text-transform: uppercase;
     cursor: pointer;
+    transition: 0.3s;
 }
 .btn-outline:active { background: rgba(212, 175, 55, 0.2); }
+
+.voice-btn {
+    display: flex; align-items: center; gap: 4px; border-color: #888; color: #888;
+}
+.voice-btn.active {
+    border-color: #69f0ae; color: #69f0ae; background: rgba(105, 240, 174, 0.1);
+    box-shadow: 0 0 10px rgba(105, 240, 174, 0.2);
+}
 
 /* Toggle Switch */
 .toggle-container {

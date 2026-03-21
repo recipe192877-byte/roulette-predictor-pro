@@ -10,6 +10,12 @@ let spinHistory = [];
 const MAX_HISTORY = 200;
 let isAggressive = false;
 const BASE_UNIT = 10;
+let isVoiceEnabled = false;
+let pnlChartInstance = null;
+
+// Voice API
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition;
 
 // DOM
 const keypad = document.getElementById('keypad');
@@ -17,22 +23,111 @@ const tape = document.getElementById('history-tape');
 
 // Initialize
 function init() {
+    loadState();
     generateKeypad();
+    
+    // Set Risk Toggle Initial State
+    document.getElementById('risk-track').classList.toggle('active', isAggressive);
+    let lbl = document.getElementById('risk-label');
+    lbl.innerText = isAggressive ? 'AGGR' : 'CONS';
+    lbl.classList.toggle('active', isAggressive);
+
     document.getElementById('btn-undo').addEventListener('click', undoSpin);
-    document.getElementById('btn-clear').addEventListener('click', () => { spinHistory = []; updateApp(); });
+    document.getElementById('btn-clear').addEventListener('click', () => { 
+        if(confirm("Clear all history?")) { spinHistory = []; updateApp(); }
+    });
     document.getElementById('btn-refresh').addEventListener('click', () => location.reload());
     
-    // Risk Toggle
+    // Risk Toggle Logic
     document.getElementById('risk-toggle').addEventListener('click', () => {
         isAggressive = !isAggressive;
         document.getElementById('risk-track').classList.toggle('active', isAggressive);
-        let lbl = document.getElementById('risk-label');
         lbl.innerText = isAggressive ? 'AGGR' : 'CONS';
         lbl.classList.toggle('active', isAggressive);
         updateApp();
     });
 
+    initVoice();
     updateApp();
+}
+
+function loadState() {
+    try {
+        let savedHist = localStorage.getItem('rppro_history');
+        if(savedHist) {
+            spinHistory = JSON.parse(savedHist);
+            if(spinHistory.length > MAX_HISTORY) spinHistory = spinHistory.slice(-MAX_HISTORY);
+        }
+        let savedRisk = localStorage.getItem('rppro_risk');
+        if(savedRisk !== null) isAggressive = (savedRisk === 'true');
+    } catch(e) { console.error("Could not load state", e); }
+}
+
+function saveState() {
+    try {
+        localStorage.setItem('rppro_history', JSON.stringify(spinHistory));
+        localStorage.setItem('rppro_risk', isAggressive);
+    } catch(e) { console.error("Could not save state", e); }
+}
+
+function initVoice() {
+    let btn = document.getElementById('btn-voice');
+    if(!SpeechRecognition) {
+        btn.style.display = 'none';
+        return;
+    }
+    
+    recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+
+    const wordsMap = {"zero":0,"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,"eight":8,"nine":9,"ten":10, "eleven":11, "twelve":12, "thirteen":13, "fourteen":14,"fifteen":15,"sixteen":16,"seventeen":17,"eighteen":18,"nineteen":19,"twenty":20,"thirty":30};
+
+    recognition.onresult = function(event) {
+        let lastResult = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
+        let numMatch = lastResult.match(/\b([0-9]|[1-2][0-9]|3[0-6])\b/);
+        
+        let foundNum = -1;
+        if(numMatch) {
+            foundNum = parseInt(numMatch[1], 10);
+        } else {
+            for(let word in wordsMap) {
+                if(lastResult.includes(word)) { foundNum = wordsMap[word]; break; }
+            }
+        }
+        
+        if(foundNum >= 0 && foundNum <= 36) {
+            speakText(`Added ${foundNum}`);
+            addSpin(foundNum);
+        }
+    };
+    
+    recognition.onend = function() {
+        if(isVoiceEnabled) recognition.start(); // auto-restart if enabled
+    };
+
+    btn.addEventListener('click', () => {
+        isVoiceEnabled = !isVoiceEnabled;
+        if(isVoiceEnabled) {
+            btn.innerHTML = '🎤 ON';
+            btn.classList.add('active');
+            recognition.start();
+            speakText("Voice mode activated");
+        } else {
+            btn.innerHTML = '🎤 OFF';
+            btn.classList.remove('active');
+            recognition.stop();
+        }
+    });
+}
+
+function speakText(text) {
+    if(!isVoiceEnabled || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    let utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.1;
+    window.speechSynthesis.speak(utterance);
 }
 
 function getColorClass(n) {
@@ -72,7 +167,8 @@ function undoSpin() {
 }
 
 function updateApp() {
-    // 1. Update Tape
+    saveState();
+
     document.getElementById('spin-count').innerText = spinHistory.length;
     tape.innerHTML = '';
     if (spinHistory.length === 0) {
@@ -86,7 +182,6 @@ function updateApp() {
         });
     }
 
-    // 2. Perform Analytics & Calculate Progession up to Current
     runAnalyticsAndBetting();
 }
 
@@ -112,32 +207,34 @@ function resetUI() {
     updateBar('red', 'black', 0, 0);
     updateBar('d1', 'd2', 0, 0, 0);
     document.getElementById('bar-d3').style.width = '33.3%';
+
+    renderChart([0]);
+    let balEl = document.getElementById('balance-display');
+    balEl.innerText = `0 Pts`;
+    balEl.style.color = '#888';
 }
 
-// Check if a number satisfies a prediction category
 function satisfiesPrediction(n, pred) {
     if(!pred || pred === 'Wait') return false;
-    if(pred.includes('Zero') && VOISINS.includes(n)) return true;
-    if(pred.includes('Opp.') && TIERS.includes(n)) return true;
-    if(pred.includes('Sides') && ORPHELINS.includes(n)) return true;
-    if(pred.includes('1 to 12') && n>=1 && n<=12) return true;
-    if(pred.includes('13 to 24') && n>=13 && n<=24) return true;
-    if(pred.includes('25 to 36') && n>=25 && n<=36) return true;
-    if(pred.includes('RED') && RED_NUMBERS.includes(n)) return true;
-    if(pred.includes('BLACK') && !RED_NUMBERS.includes(n) && n!==0) return true;
-    if(pred.includes('EVEN') && n%2===0 && n!==0) return true;
-    if(pred.includes('ODD') && n%2!==0 && n!==0) return true;
-    if(pred.includes('Low') && n>=1 && n<=18) return true;
-    if(pred.includes('High') && n>=19 && n<=36) return true;
+    let plainPred = pred.replace(/<[^>]*>?/gm, ''); 
+    if(plainPred.includes('Zero') && VOISINS.includes(n)) return true;
+    if(plainPred.includes('Opp.') && TIERS.includes(n)) return true;
+    if(plainPred.includes('Sides') && ORPHELINS.includes(n)) return true;
+    if(plainPred.includes('1 to 12') && n>=1 && n<=12) return true;
+    if(plainPred.includes('13 to 24') && n>=13 && n<=24) return true;
+    if(plainPred.includes('25 to 36') && n>=25 && n<=36) return true;
+    if(plainPred.includes('RED') && RED_NUMBERS.includes(n)) return true;
+    if(plainPred.includes('BLACK') && !RED_NUMBERS.includes(n) && n!==0) return true;
+    if(plainPred.includes('EVEN') && n%2===0 && n!==0) return true;
+    if(plainPred.includes('ODD') && n%2!==0 && n!==0) return true;
+    if(plainPred.includes('Low') && n>=1 && n<=18) return true;
+    if(plainPred.includes('High') && n>=19 && n<=36) return true;
     return false;
 }
 
-// Returns { sectorText, dozenText, outsideText } for a given slice of history
 function getPredictionsForHistory(historySlice) {
     if(historySlice.length < 5) return { sec: 'Wait', doz: 'Wait', out: 'Wait' };
     
-    // Constants for Thresholds based on Mode
-    // Conservative requires stronger trends, Aggressive tries to jump on early trends
     const thresholdMult = isAggressive ? 0.7 : 1.3;
     
     // Sector
@@ -193,6 +290,89 @@ function getPredictionsForHistory(historySlice) {
     return { sec: sText, doz: dText, out: oText };
 }
 
+function calculatePnL(spins) {
+    if(spins.length < 5) return [0];
+    let balance = 0;
+    let bHist = [0];
+    
+    let prog = { dozen: 0, outside: 0 };
+    for(let i = 5; i < spins.length; i++) {
+        let hAtPoint = spins.slice(0, i);
+        let preds = getPredictionsForHistory(hAtPoint);
+        let actual = spins[i];
+        
+        let stepCost = 0;
+        let stepWin = 0;
+        
+        if(preds.doz !== 'Wait') {
+            let amt = Math.ceil(BASE_UNIT * Math.pow(1.5, prog.dozen));
+            if(amt > 10) amt = Math.round(amt/5)*5;
+            stepCost += amt;
+            if(satisfiesPrediction(actual, preds.doz)) {
+                stepWin += (amt * 3);
+                prog.dozen = 0;
+            } else prog.dozen = Math.min(prog.dozen + 1, 5);
+        }
+        
+        if(preds.out !== 'Wait') {
+            let amt = Math.ceil(BASE_UNIT * Math.pow(2.0, prog.outside));
+            if(amt > 10) amt = Math.round(amt/5)*5;
+            stepCost += amt;
+            if(satisfiesPrediction(actual, preds.out)) {
+                stepWin += (amt * 2);
+                prog.outside = 0;
+            } else prog.outside = Math.min(prog.outside + 1, 6);
+        }
+        
+        balance = balance - stepCost + stepWin;
+        bHist.push(balance);
+    }
+    return bHist;
+}
+
+function renderChart(dataArr) {
+    let ctx = document.getElementById('pnlChart');
+    if(!ctx) return;
+    
+    let labels = dataArr.map((_, i) => i);
+    let color = dataArr[dataArr.length-1] >= 0 ? '#69f0ae' : '#ff5252';
+
+    if(pnlChartInstance) {
+        pnlChartInstance.data.labels = labels;
+        pnlChartInstance.data.datasets[0].data = dataArr;
+        pnlChartInstance.data.datasets[0].borderColor = color;
+        pnlChartInstance.update();
+    } else {
+        Chart.defaults.color = '#888';
+        Chart.defaults.font.family = 'Montserrat';
+        pnlChartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Virtual PnL',
+                    data: dataArr,
+                    borderColor: color,
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { display: false },
+                    y: { 
+                        display: true, 
+                        grid: { color: 'rgba(255,255,255,0.05)' }
+                    }
+                }
+            }
+        });
+    }
+}
 
 function runAnalyticsAndBetting() {
     const len = spinHistory.length;
@@ -201,43 +381,36 @@ function runAnalyticsAndBetting() {
         return;
     }
 
-    // --- 1. Calculate Betting Progression from History ---
-    // Martingale progression strictly tracked based on "what we would have predicted" vs "what actually hit"
+    // 1. Calculate Progression
     let prog = { sector: 0, dozen: 0, outside: 0 };
-    
     for(let i = 5; i < spinHistory.length; i++) {
         let historyAtThatPoint = spinHistory.slice(0, i);
         let preds = getPredictionsForHistory(historyAtThatPoint);
         let actualHit = spinHistory[i];
         
-        // Sector evaluation
         if(preds.sec !== 'Wait') {
-            if(satisfiesPrediction(actualHit, preds.sec)) prog.sector = 0; // Win, reset
-            else prog.sector = Math.min(prog.sector + 1, 5); // Lose, increase step (max 5)
+            if(satisfiesPrediction(actualHit, preds.sec)) prog.sector = 0;
+            else prog.sector = Math.min(prog.sector + 1, 5);
         }
-        
-        // Dozen eval
         if(preds.doz !== 'Wait') {
             if(satisfiesPrediction(actualHit, preds.doz)) prog.dozen = 0;
             else prog.dozen = Math.min(prog.dozen + 1, 5);
         }
-
-        // Outside eval
         if(preds.out !== 'Wait') {
             if(satisfiesPrediction(actualHit, preds.out)) prog.outside = 0;
-            else prog.outside = Math.min(prog.outside + 1, 6); // Max 6 steps on 50/50
+            else prog.outside = Math.min(prog.outside + 1, 6);
         }
     }
 
-    // --- 2. Calculate CURRENT Predictions ---
+    // 2. Current Predictions
     let currentPreds = getPredictionsForHistory(spinHistory);
-    
-    // Apply UI for Areas & Trends
     let areas = [
-        { id: 'sector', html: currentPreds.sec, p: prog.sector, mult: 2.0 }, // Voisins ~50%, so mostly double.
-        { id: 'dozen', html: currentPreds.doz, p: prog.dozen, mult: 1.5 }, // Dozens pay 2:1, so we can use a softer progression
-        { id: 'outside', html: currentPreds.out, p: prog.outside, mult: 2.0 } // Even money
+        { id: 'sector', html: currentPreds.sec, p: prog.sector, mult: 2.0 },
+        { id: 'dozen', html: currentPreds.doz, p: prog.dozen, mult: 1.5 },
+        { id: 'outside', html: currentPreds.out, p: prog.outside, mult: 2.0 }
     ];
+
+    let spokenAlerts = [];
 
     areas.forEach(ar => {
         document.getElementById(`pred-${ar.id}`).innerHTML = ar.html;
@@ -245,16 +418,15 @@ function runAnalyticsAndBetting() {
         let betEl = document.getElementById(`bet-${ar.id}`);
         
         if(ar.html !== 'Wait') {
-            // Calculate Exact Bet Amount
-            // Progression 0 = 10, Prog 1 = 20, Prog 2 = 40 (If mult is 2)
-            // If Dozen (mult=1.5), then 10 -> 15 -> 23 -> 35
             let bet = Math.ceil(BASE_UNIT * Math.pow(ar.mult, ar.p));
-            // Round to nearest 5 for clean numbers
             if(bet > 10) bet = Math.round(bet/5)*5;
             
             betEl.innerHTML = `Bet ${bet} Pts`;
             betEl.className = 'bet-amt hot mt-5';
             box.classList.add('active-bet');
+
+            let plainHtml = ar.html.replace(/<[^>]*>?/gm, '');
+            spokenAlerts.push(`Bet ${bet} on ${plainHtml}`);
         } else {
             betEl.innerHTML = '--';
             betEl.className = 'bet-amt mt-5';
@@ -262,8 +434,11 @@ function runAnalyticsAndBetting() {
         }
     });
 
+    if(spokenAlerts.length > 0) {
+        speakText(spokenAlerts[spokenAlerts.length - 1]);
+    }
 
-    // --- 3. High Accuracy Engine for Single Numbers ---
+    // 3. Single Numbers
     let freq = {}, lastSeen = {}, transitions = {};
     let lastNum = spinHistory[spinHistory.length - 1];
 
@@ -291,7 +466,6 @@ function runAnalyticsAndBetting() {
     }
     scores.sort((a,b) => b.score - a.score);
     
-    // Top 3 updates
     for(let i=1; i<=3; i++) {
         let el = document.getElementById(`pred-${i}`);
         let num = scores[i-1].num;
@@ -303,7 +477,6 @@ function runAnalyticsAndBetting() {
         let box = document.getElementById(`box-pred-${i}`);
         let betEl = document.getElementById(`bet-${i}`);
         
-        // If the score is strong enough, suggest betting BASE_UNIT flat
         let thresh = isAggressive ? 1.5 : 2.5; 
         if(scoreVal > thresh) {
             betEl.innerHTML = `Bet ${BASE_UNIT} Pts`;
@@ -316,7 +489,7 @@ function runAnalyticsAndBetting() {
         }
     }
 
-    // --- 4. Streaks & Standard Deviation Tracker ---
+    // 4. Streaks
     let recents = spinHistory.slice(-15);
     let stText = "None";
     if(recents.length >= 7) {
@@ -328,16 +501,14 @@ function runAnalyticsAndBetting() {
                 if(n%2===0) eCount++; else oCount++;
             }
         });
-        
-        // Z-score logic approximated: 6 or 7 of same type in last 7 is abnormal
-        if(rCount >= 6) stText = "<span class='text-red'>Red Overbought (Revert soon)</span>";
-        else if(bCount >= 6) stText = "Black Overbought (Revert soon)";
+        if(rCount >= 6) stText = "<span class='text-red'>Red Overbought</span>";
+        else if(bCount >= 6) stText = "Black Overbought";
         else if(eCount >= 6) stText = "<span class='text-gold'>Even Overbought</span>";
         else if(oCount >= 6) stText = "<span class='text-gold'>Odd Overbought</span>";
     }
     document.getElementById('streak-alert').innerHTML = stText;
 
-    // --- 5. Dealer Signature ---
+    // 5. Dealer Signature
     if (len >= 10) {
         let distances = [];
         for(let i=0; i<len-1; i++) {
@@ -362,7 +533,7 @@ function runAnalyticsAndBetting() {
         document.getElementById('dealer-sig').innerHTML = sigText;
     }
 
-    // --- 6. Progress Bars (Recent 30) ---
+    // 6. Progress Bars
     let recentSpins = spinHistory.slice(-30);
     let r=0, b=0, d1=0, d2=0, d3=0, nonZero=0;
     
@@ -375,7 +546,6 @@ function runAnalyticsAndBetting() {
 
     updateBar('red', 'black', r, b, nonZero);
     
-    // Dozens 3-way bar
     if(nonZero > 0) {
         let pd1 = Math.round((d1/nonZero)*100);
         let pd2 = Math.round((d2/nonZero)*100);
@@ -387,18 +557,58 @@ function runAnalyticsAndBetting() {
         document.getElementById('bar-d2').style.width = `${pd2}%`;
         document.getElementById('bar-d3').style.width = `${100-pd1-pd2}%`;
     }
+
+    // 7. Calculate Virtual PnL & Render Chart
+    let bHist = calculatePnL(spinHistory);
+    let currentBal = bHist[bHist.length - 1] || 0;
+    
+    let balEl = document.getElementById('balance-display');
+    balEl.innerText = `${currentBal > 0 ? '+' : ''}${currentBal} Pts`;
+    balEl.style.color = currentBal >= 0 ? '#69f0ae' : '#ff5252';
+
+    renderChart(bHist);
+    
+    // 8. Async ML Override (Optimistic UI)
+    fetchMLUpdate();
 }
 
-function updateBar(id1, id2, count1, count2, total=0) {
-    let p1 = 0, p2 = 0;
-    if(total > 0) {
-        p1 = Math.round((count1/total)*100);
-        p2 = Math.round((count2/total)*100);
-    }
-    document.getElementById(`pct-${id1}`).innerText = `${p1}%`;
-    document.getElementById(`pct-${id2}`).innerText = `${p2}%`;
-    let w = total === 0 ? 50 : p1;
-    document.getElementById(`bar-${id1}`).style.width = `${w}%`;
+async function fetchMLUpdate() {
+   try {
+       let res = await fetch('http://127.0.0.1:5000/predict', {
+           method: 'POST',
+           headers: {'Content-Type': 'application/json'},
+           body: JSON.stringify({ spins: spinHistory })
+       });
+       if(res.ok) {
+           let data = await res.json();
+           if(data.status === 'success') {
+               let top3 = data.predictions;
+               for(let i=1; i<=3; i++) {
+                   let el = document.getElementById(`pred-${i}`);
+                   let num = top3[i-1];
+                   el.innerText = num;
+                   el.className = `val ${getTextColorClass(num)}`;
+                   
+                   let box = document.getElementById(`box-pred-${i}`);
+                   let betEl = document.getElementById(`bet-${i}`);
+                   let conf = data.confidence;
+                   let thresh = isAggressive ? 1.5 : 2.5; 
+                   if(conf > thresh) {
+                       betEl.innerHTML = `Bet ${BASE_UNIT} Pts`;
+                       betEl.className = 'bet-amt hot';
+                       box.classList.add('active-bet');
+                   } else {
+                       betEl.innerHTML = 'Wait';
+                       betEl.className = 'bet-amt';
+                       box.classList.remove('active-bet');
+                   }
+               }
+               document.getElementById('dealer-sig').innerHTML = `<span class='text-green' style='font-size:11px'>ML Online</span>`;
+           }
+       }
+   } catch(e) {
+       // Silent fail for offline PWA operation
+   }
 }
 
 // Boot
