@@ -1,0 +1,18 @@
+{
+  "name": "Roulette Predictor Pro",
+  "short_name": "Roulette Pro",
+  "description": "Advanced AI predicting roulette spins with risk management",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#D4AF37",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "./icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
