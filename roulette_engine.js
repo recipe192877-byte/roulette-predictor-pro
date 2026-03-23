@@ -9,7 +9,7 @@ const ORPHELINS = [1, 20, 14, 31, 9, 17, 34, 6];
 let spinHistory = [];
 const MAX_HISTORY = 200;
 let isAggressive = false;
-let progMode = 'MART'; // MART, FIBO, DALE
+let progMode = 'MART'; // MART, FIBO, DALE, AUTO
 let serverIP = localStorage.getItem('rppro_server_ip') || 'localhost';
 const BASE_UNIT = 10;
 const MAX_BET = 500;
@@ -68,6 +68,7 @@ function init() {
     document.getElementById('prog-toggle').addEventListener('click', () => {
         if(progMode === 'MART') progMode = 'FIBO';
         else if(progMode === 'FIBO') progMode = 'DALE';
+        else if(progMode === 'DALE') progMode = 'AUTO';
         else progMode = 'MART';
         updateProgUI();
         updateApp();
@@ -78,9 +79,10 @@ function updateProgUI() {
     let progLbl = document.getElementById('prog-label');
     let track = document.getElementById('prog-track');
     progLbl.innerText = progMode;
-    if(progMode === 'MART') { track.classList.remove('active'); progLbl.classList.remove('active'); track.style.borderColor=''; }
-    else if(progMode === 'FIBO') { track.classList.add('active'); progLbl.classList.add('active'); track.style.borderColor=''; }
-    else { track.classList.add('active'); progLbl.classList.remove('active'); track.style.borderColor='#69f0ae'; }
+    if(progMode === 'MART') { track.classList.remove('active'); progLbl.classList.remove('active'); track.style.borderColor=''; progLbl.style.color=''; }
+    else if(progMode === 'FIBO') { track.classList.add('active'); progLbl.classList.add('active'); track.style.borderColor=''; progLbl.style.color=''; }
+    else if(progMode === 'DALE') { track.classList.add('active'); progLbl.classList.remove('active'); track.style.borderColor='#69f0ae'; progLbl.style.color=''; }
+    else { track.classList.add('active'); progLbl.classList.add('active'); track.style.borderColor='#00e5ff'; progLbl.style.color='#00e5ff'; } // AUTO
 }
 
 function updateServerStatus(text, statusItem) {
@@ -90,10 +92,19 @@ function updateServerStatus(text, statusItem) {
 }
 
 function getBetAmount(progSteps, mult, type) {
+    let modeToUse = progMode;
+    
+    // AI Intelligent Progression Switching
+    if (progMode === 'AUTO') {
+        if (progSteps >= 3) modeToUse = 'FIBO'; // Deep Loss Streak -> Survive with Fibo
+        else if (progSteps > 0) modeToUse = 'MART'; // Early Loss -> Aggressive recover
+        else modeToUse = 'DALE'; // Winning or Baseline -> Lock in profits safely
+    }
+
     let amt = 0;
-    if(progMode === 'FIBO') {
+    if(modeToUse === 'FIBO') {
         amt = BASE_UNIT * FIB[Math.min(progSteps, FIB.length - 1)];
-    } else if(progMode === 'DALE') {
+    } else if(modeToUse === 'DALE') {
         amt = BASE_UNIT + (progSteps * (BASE_UNIT / 2)); 
     } else { // MART
         if(type === 'math') {
