@@ -63,6 +63,20 @@ header {
     padding: 8px 5px;
 }
 
+.logo-area { display: flex; flex-direction: column; }
+.server-status {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 8px; color: var(--text-muted); cursor: pointer;
+    margin-top: 2px;
+}
+.status-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #ffc107; /* default connecting */
+    box-shadow: 0 0 5px rgba(255, 193, 7, 0.5);
+}
+.status-dot.online { background: #69f0ae; box-shadow: 0 0 8px rgba(105, 240, 174, 0.6); }
+.status-dot.offline { background: #ff5252; box-shadow: 0 0 8px rgba(255, 82, 82, 0.6); }
+
 .logo {
     font-family: 'Cinzel', serif;
     font-size: 20px;
@@ -329,4 +343,23 @@ header {
 .text-cyan {
     color: #00e5ff !important;
     text-shadow: 0 0 8px rgba(0, 229, 255, 0.5);
+}
+
+/* Media Query for Mobile Optimization */
+@media (max-width: 500px) {
+    .logo { font-size: 22px; }
+    .val { font-size: 32px; }
+    .primary-pred .val { font-size: 44px; }
+    .val-sm { font-size: 14px; }
+    .lbl { font-size: 10px; }
+    .bet-amt { font-size: 12px; padding: 4px 6px; }
+    .btn-outline { font-size: 11px; padding: 6px 12px; }
+    .toggle-label { font-size: 11px; }
+    .toggle-track { width: 40px; height: 22px; }
+    .toggle-knob { width: 18px; height: 18px; top: 1px; left: 2px; }
+    .toggle-track.active .toggle-knob { left: 19px; }
+    .key { font-size: 20px; }
+    .mt-10 { margin-top: 6px; }
+    .app-container { padding: 6px; }
+    .prediction-panel, .analytics-panel, .chart-panel { padding: 8px; }
 }

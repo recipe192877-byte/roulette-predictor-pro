@@ -122,12 +122,12 @@ def predict():
                 
                 # We need at least 2 classes to train a classifier
                 if len(set(y_train)) > 1:
-                    rf = RandomForestClassifier(n_estimators=50, random_state=42, max_depth=5)
+                    rf = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=4, min_samples_leaf=2)
                     rf.fit(X_train, y_train)
                     
                     # XGBoost needs classes from 0 to num_classes-1, but our classes might not be contiguous
                     # So we use standard Scikit-Learn wrapper which handles labels automatically
-                    xgb = XGBClassifier(n_estimators=50, max_depth=3, learning_rate=0.1, use_label_encoder=False, eval_metric='mlogloss', random_state=42)
+                    xgb = XGBClassifier(n_estimators=80, max_depth=2, learning_rate=0.05, min_child_weight=2, gamma=0.1, use_label_encoder=False, eval_metric='mlogloss', random_state=42)
                     xgb.fit(X_train, y_train)
                     
                     # Predict next

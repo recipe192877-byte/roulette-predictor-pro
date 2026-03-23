@@ -9,8 +9,10 @@ const ORPHELINS = [1, 20, 14, 31, 9, 17, 34, 6];
 let spinHistory = [];
 const MAX_HISTORY = 200;
 let isAggressive = false;
-let isFibonacci = false;
+let progMode = 'MART'; // MART, FIBO, DALE
+let serverIP = localStorage.getItem('rppro_server_ip') || 'localhost';
 const BASE_UNIT = 10;
+const MAX_BET = 500;
 const FIB = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233];
 let isVoiceEnabled = false;
 let pnlChartInstance = null;
@@ -40,6 +42,17 @@ function init() {
     });
     document.getElementById('btn-refresh').addEventListener('click', () => location.reload());
     
+    // Server Config
+    document.getElementById('server-status').addEventListener('click', () => {
+        let ip = prompt("Enter Server IP (e.g. 192.168.1.5) or 'localhost':", serverIP);
+        if(ip && ip.trim() !== "") {
+            serverIP = ip.trim();
+            localStorage.setItem('rppro_server_ip', serverIP);
+            updateServerStatus('Connecting...', '');
+            fetchMLUpdate();
+        }
+    });
+
     // Risk Toggle Logic
     document.getElementById('risk-toggle').addEventListener('click', () => {
         isAggressive = !isAggressive;
@@ -50,18 +63,48 @@ function init() {
     });
 
     // Progression Toggle Logic
-    let progLbl = document.getElementById('prog-label');
-    document.getElementById('prog-track').classList.toggle('active', isFibonacci);
-    progLbl.innerText = isFibonacci ? 'FIBO' : 'MART';
-    progLbl.classList.toggle('active', isFibonacci);
+    updateProgUI();
 
     document.getElementById('prog-toggle').addEventListener('click', () => {
-        isFibonacci = !isFibonacci;
-        document.getElementById('prog-track').classList.toggle('active', isFibonacci);
-        progLbl.innerText = isFibonacci ? 'FIBO' : 'MART';
-        progLbl.classList.toggle('active', isFibonacci);
+        if(progMode === 'MART') progMode = 'FIBO';
+        else if(progMode === 'FIBO') progMode = 'DALE';
+        else progMode = 'MART';
+        updateProgUI();
         updateApp();
     });
+}
+
+function updateProgUI() {
+    let progLbl = document.getElementById('prog-label');
+    let track = document.getElementById('prog-track');
+    progLbl.innerText = progMode;
+    if(progMode === 'MART') { track.classList.remove('active'); progLbl.classList.remove('active'); track.style.borderColor=''; }
+    else if(progMode === 'FIBO') { track.classList.add('active'); progLbl.classList.add('active'); track.style.borderColor=''; }
+    else { track.classList.add('active'); progLbl.classList.remove('active'); track.style.borderColor='#69f0ae'; }
+}
+
+function updateServerStatus(text, statusItem) {
+    document.getElementById('status-text').innerText = text;
+    let dot = document.getElementById('status-dot');
+    if(dot) dot.className = 'status-dot ' + statusItem;
+}
+
+function getBetAmount(progSteps, mult, type) {
+    let amt = 0;
+    if(progMode === 'FIBO') {
+        amt = BASE_UNIT * FIB[Math.min(progSteps, FIB.length - 1)];
+    } else if(progMode === 'DALE') {
+        amt = BASE_UNIT + (progSteps * (BASE_UNIT / 2)); 
+    } else { // MART
+        if(type === 'math') {
+            amt = Math.ceil(BASE_UNIT * Math.pow(mult, Math.min(progSteps, 5))); // Limit to 5 steps
+            if(amt > 10) amt = Math.round(amt/5)*5;
+        } else {
+            amt = BASE_UNIT * (Math.min(progSteps, 5) + 1);
+        }
+    }
+    return Math.min(amt, MAX_BET);
+
 
     initVoice();
     updateApp();
@@ -77,8 +120,8 @@ function loadState() {
         let savedRisk = localStorage.getItem('rppro_risk');
         if(savedRisk !== null) isAggressive = (savedRisk === 'true');
         
-        let savedProg = localStorage.getItem('rppro_prog');
-        if(savedProg !== null) isFibonacci = (savedProg === 'true');
+        let savedProg = localStorage.getItem('rppro_prog_mode');
+        if(savedProg !== null) progMode = savedProg;
     } catch(e) { console.error("Could not load state", e); }
 }
 
@@ -86,7 +129,7 @@ function saveState() {
     try {
         localStorage.setItem('rppro_history', JSON.stringify(spinHistory));
         localStorage.setItem('rppro_risk', isAggressive);
-        localStorage.setItem('rppro_prog', isFibonacci);
+        localStorage.setItem('rppro_prog_mode', progMode);
     } catch(e) { console.error("Could not save state", e); }
 }
 
@@ -376,51 +419,40 @@ function calculatePnL(spins) {
         let stepWin = 0;
         
         if(preds.col !== 'Wait') {
-            let amt = isFibonacci ? BASE_UNIT * FIB[Math.min(prog.column, FIB.length - 1)] : Math.ceil(BASE_UNIT * Math.pow(1.5, prog.column));
-            if(amt > 10 && !isFibonacci) amt = Math.round(amt/5)*5;
+            let amt = getBetAmount(prog.column, 1.5, 'math');
             stepCost += amt;
-            if(satisfiesPrediction(actual, preds.col)) {
-                stepWin += (amt * 3);
-                prog.column = 0;
-            } else prog.column = Math.min(prog.column + 1, 8);
+            if(satisfiesPrediction(actual, preds.col)) { stepWin += (amt * 3); prog.column = 0; } 
+            else prog.column = Math.min(prog.column + 1, 8);
         }
-        
         if(preds.doz !== 'Wait') {
-            let amt = isFibonacci ? BASE_UNIT * FIB[Math.min(prog.dozen, FIB.length - 1)] : Math.ceil(BASE_UNIT * Math.pow(1.5, prog.dozen));
-            if(amt > 10 && !isFibonacci) amt = Math.round(amt/5)*5;
+            let amt = getBetAmount(prog.dozen, 1.5, 'math');
             stepCost += amt;
-            if(satisfiesPrediction(actual, preds.doz)) {
-                stepWin += (amt * 3);
-                prog.dozen = 0;
-            } else prog.dozen = Math.min(prog.dozen + 1, 8);
+            if(satisfiesPrediction(actual, preds.doz)) { stepWin += (amt * 3); prog.dozen = 0; } 
+            else prog.dozen = Math.min(prog.dozen + 1, 8);
         }
-        
         if(preds.out !== 'Wait') {
-            let amt = isFibonacci ? BASE_UNIT * FIB[Math.min(prog.outside, FIB.length - 1)] : Math.ceil(BASE_UNIT * Math.pow(2.0, prog.outside));
-            if(amt > 10 && !isFibonacci) amt = Math.round(amt/5)*5;
+            let amt = getBetAmount(prog.outside, 2.0, 'math');
             stepCost += amt;
-            if(satisfiesPrediction(actual, preds.out)) {
-                stepWin += (amt * 2);
-                prog.outside = 0;
-            } else prog.outside = Math.min(prog.outside + 1, 10);
+            if(satisfiesPrediction(actual, preds.out)) { stepWin += (amt * 2); prog.outside = 0; } 
+            else prog.outside = Math.min(prog.outside + 1, 10);
         }
 
         if(preds.french.v !== 'Wait') {
-            let amt = isFibonacci ? BASE_UNIT * FIB[Math.min(prog.v, FIB.length - 1)] : BASE_UNIT * (prog.v + 1);
+            let amt = getBetAmount(prog.v, 1.0, 'flat');
             stepCost += amt;
-            if(satisfiesPrediction(actual, preds.french.v)) { stepWin += (amt * 2); prog.v = 0; }
+            if(satisfiesPrediction(actual, preds.french.v)) { stepWin += (amt * 2); prog.v = 0; } 
             else prog.v = Math.min(prog.v + 1, 8);
         }
         if(preds.french.t !== 'Wait') {
-            let amt = isFibonacci ? BASE_UNIT * FIB[Math.min(prog.t, FIB.length - 1)] : BASE_UNIT * (prog.t + 1);
+            let amt = getBetAmount(prog.t, 1.0, 'flat');
             stepCost += amt;
-            if(satisfiesPrediction(actual, preds.french.t)) { stepWin += (amt * 3); prog.t = 0; }
+            if(satisfiesPrediction(actual, preds.french.t)) { stepWin += (amt * 3); prog.t = 0; } 
             else prog.t = Math.min(prog.t + 1, 8);
         }
         if(preds.french.o !== 'Wait') {
-            let amt = isFibonacci ? BASE_UNIT * FIB[Math.min(prog.o, FIB.length - 1)] : BASE_UNIT * (prog.o + 1);
+            let amt = getBetAmount(prog.o, 1.0, 'flat');
             stepCost += amt;
-            if(satisfiesPrediction(actual, preds.french.o)) { stepWin += (amt * 4); prog.o = 0; }
+            if(satisfiesPrediction(actual, preds.french.o)) { stepWin += (amt * 4); prog.o = 0; } 
             else prog.o = Math.min(prog.o + 1, 8);
         }
         
@@ -536,17 +568,7 @@ function runAnalyticsAndBetting() {
         pEl.innerHTML = ar.html;
         
         if(ar.html !== 'Wait') {
-            let bet = 0;
-            if(isFibonacci) {
-                bet = BASE_UNIT * FIB[Math.min(ar.p, FIB.length - 1)];
-            } else {
-                if(ar.type === 'math') {
-                    bet = Math.ceil(BASE_UNIT * Math.pow(ar.mult, ar.p));
-                    if(bet > 10) bet = Math.round(bet/5)*5;
-                } else {
-                    bet = BASE_UNIT * (ar.p + 1);
-                }
-            }
+            let bet = getBetAmount(ar.p, ar.mult, ar.type);
             
             betEl.innerHTML = `Bet ${bet} Pts`;
             betEl.className = 'bet-amt hot mt-5';
@@ -669,7 +691,7 @@ function runAnalyticsAndBetting() {
         let sigText = "Unclear";
         if(maxHits >= Math.max(3, distances.length * 0.2)) {
             let lIdx = ROULETTE_NUMBERS.indexOf(spinHistory[spinHistory.length - 1]);
-            let tNums = [0,1,2,3,4].map(off => ROULETTE_NUMBERS[(lIdx + (bestStart+off)%37)%37]);
+            let tNums = [0,1,2,3,4].map(off => ROULETTE_NUMBERS[(lIdx + (bestStart+off)%37)%37]).sort((a,b) => a-b);
             sigText = `<span class="text-gold" style="font-size:11px;">Track: ${tNums.join(',')}</span>`;
         }
         document.getElementById('dealer-sig').innerHTML = sigText;
@@ -716,12 +738,13 @@ function runAnalyticsAndBetting() {
 
 async function fetchMLUpdate() {
    try {
-       let res = await fetch('http://localhost:5000/predict', {
+       let res = await fetch(`http://${serverIP}:5000/predict`, {
            method: 'POST',
            headers: {'Content-Type': 'application/json'},
            body: JSON.stringify({ spins: spinHistory })
        });
        if(res.ok) {
+           updateServerStatus('Online', 'online');
            let data = await res.json();
            if(data.status === 'success') {
                let top3 = data.predictions;
@@ -760,9 +783,12 @@ async function fetchMLUpdate() {
                }
                document.getElementById('dealer-sig').innerHTML = `<span class='text-cyan' style='font-size:11px'>ML: ${data.model.substring(0,25)}</span>`;
            }
+       } else {
+           updateServerStatus('Offline', 'offline');
        }
    } catch(e) {
        console.error("ML Fetch Error: ", e);
+       updateServerStatus('Offline', 'offline');
    }
 }
 

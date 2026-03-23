@@ -17,7 +17,13 @@
         
         <!-- Header -->
         <header>
-            <div class="logo">Roulette<span>PRO</span> v2</div>
+            <div class="logo-area">
+                <div class="logo">Roulette<span>PRO</span> v2</div>
+                <div class="server-status" id="server-status" title="Click to set AI Server IP">
+                    <div class="status-dot" id="status-dot"></div>
+                    <span id="status-text">Connecting...</span>
+                </div>
+            </div>
             <div class="header-controls">
                 <button id="btn-voice" class="btn-outline voice-btn" title="Toggle Voice Commands">🎤 OFF</button>
                 <div class="toggle-container" id="risk-toggle" title="Risk Mode: Conservative / Aggressive">
