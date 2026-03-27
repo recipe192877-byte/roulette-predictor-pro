@@ -1,807 +1,744 @@
-// Roulette Specific Constants
-const ROULETTE_NUMBERS = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26];
-const RED_NUMBERS = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36];
-const VOISINS = [22, 18, 29, 7, 28, 12, 35, 3, 26, 0, 32, 15, 19, 4, 21, 2, 25];
-const TIERS = [27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33];
-const ORPHELINS = [1, 20, 14, 31, 9, 17, 34, 6];
+// ============================================================
+// ROULETTE PREDICTOR PRO - v3.1 SMART ENGINE
+// Key Fix: ONE best bet per spin, not 6 simultaneous bets
+// ============================================================
 
-// State
+const ROULETTE_NUMBERS = [0,32,15,19,4,21,2,25,17,34,6,27,13,36,11,30,8,23,10,5,24,16,33,1,20,14,31,9,22,18,29,7,28,12,35,3,26];
+const RED_NUMBERS = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
+const VOISINS   = [22,18,29,7,28,12,35,3,26,0,32,15,19,4,21,2,25];
+const TIERS     = [27,13,36,11,30,8,23,10,5,24,16,33];
+const ORPHELINS = [1,20,14,31,9,17,34,6];
+
+// ============================================================
+// HISTORICAL DATA — ~300 real spins baked in as prior
+// ============================================================
+const HISTORICAL_SPIN_DATA = [
+    31,22,15,18,32,25,31,19,31,26,24,25,
+    28,14,24,16,15,16,31,10,9,2,19,7,11,17,
+    6,7,13,22,14,24,7,24,13,26,29,14,28,16,
+    27,19,18,1,32,0,31,30,4,3,10,13,13,4,
+    9,35,25,8,31,36,3,27,20,14,23,31,20,32,
+    14,36,21,8,27,35,16,14,26,11,15,16,19,13,
+    36,9,7,35,3,36,16,29,9,10,1,21,28,29,
+    13,25,24,20,27,36,24,0,30,26,36,32,9,23,
+    14,35,17,11,18,16,24,13,34,31,14,17,35,32,
+    8,8,22,22,27,18,5,0,31,6,9,34,5,4,
+    9,18,14,26,20,0,28,27,14,32,10,7,18,2,
+    13,12,4,0,9,25,10,12,19,12,8,3,36,33,
+    36,6,0,31,6,19,31,2,33,0,32,27,14,26,
+    29,33,30,5,0,6,1,20,22,3,10,15,36,25,
+    9,29,2,14,30,33,22,7,0,18,33,2,30,10,
+    4,21,19,8,8,6,18,24,0,19,13,9,10,30,
+    32,6,25,19,15,0,8,32,15,32,0,25,16,32,
+    32,2,1,11,2,20,20,18,32,28,18,33,27,18,
+    2,30,30,13,2,13,35,17,2,29,32,9,15,26,
+    31,28,16,5,24,1,21,11,18,13,20,27,1,4,
+    19,8,2,23,8,34,25,6,7,8,0,31,33,5,
+    33,20,17,34,32,16,28,8,18,30,3,6,12,23,
+    27,29,14,28,28,23,17,35,23,2,24,7,6,14
+];
+
+// Baseline frequency (0-36)
+const BASE_FREQ = new Array(37).fill(0);
+HISTORICAL_SPIN_DATA.forEach(n => BASE_FREQ[n]++);
+const BASE_TOTAL = HISTORICAL_SPIN_DATA.length;
+
+// Baseline Markov (historical transitions)
+const BASE_TRANSITIONS = Array.from({length:37}, () => new Array(37).fill(0));
+for(let i=0;i<HISTORICAL_SPIN_DATA.length-1;i++)
+    BASE_TRANSITIONS[HISTORICAL_SPIN_DATA[i]][HISTORICAL_SPIN_DATA[i+1]]++;
+
+// ============================================================
+// STATE
+// ============================================================
 let spinHistory = [];
-const MAX_HISTORY = 200;
+const MAX_HISTORY = 500;
 let isAggressive = false;
-let progMode = 'MART'; // MART, FIBO, DALE, AUTO
+let progMode = 'FLAT'; // Default to FLAT for safety
 let serverIP = localStorage.getItem('rppro_server_ip') || 'localhost';
 const BASE_UNIT = 10;
-const MAX_BET = 500;
-const FIB = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233];
+const MAX_BET = 200;
+const FIB = [1,1,2,3,5,8,13,21,34,55,89];
 let isVoiceEnabled = false;
 let pnlChartInstance = null;
+let consecutiveLosses = 0; // Track losses for circuit breaker
 
-// Voice API
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition;
-
-// DOM
 const keypad = document.getElementById('keypad');
-const tape = document.getElementById('history-tape');
+const tape   = document.getElementById('history-tape');
 
-// Initialize
+// ============================================================
+// INIT
+// ============================================================
 function init() {
     loadState();
     generateKeypad();
-    
-    // Set Risk Toggle Initial State
-    document.getElementById('risk-track').classList.toggle('active', isAggressive);
     let lbl = document.getElementById('risk-label');
+    document.getElementById('risk-track').classList.toggle('active', isAggressive);
     lbl.innerText = isAggressive ? 'AGGR' : 'CONS';
     lbl.classList.toggle('active', isAggressive);
-
     document.getElementById('btn-undo').addEventListener('click', undoSpin);
-    document.getElementById('btn-clear').addEventListener('click', () => { 
-        if(confirm("Clear all history?")) { spinHistory = []; updateApp(); }
+    document.getElementById('btn-clear').addEventListener('click', () => {
+        if(confirm("Clear all history?")) { spinHistory=[]; consecutiveLosses=0; updateApp(); }
     });
     document.getElementById('btn-refresh').addEventListener('click', () => location.reload());
-    
-    // Server Config
     document.getElementById('server-status').addEventListener('click', () => {
-        let ip = prompt("Enter Server IP (e.g. 192.168.1.5) or 'localhost':", serverIP);
-        if(ip && ip.trim() !== "") {
-            serverIP = ip.trim();
-            localStorage.setItem('rppro_server_ip', serverIP);
-            updateServerStatus('Connecting...', '');
-            fetchMLUpdate();
-        }
+        let ip = prompt("Enter Server IP:", serverIP);
+        if(ip && ip.trim()) { serverIP=ip.trim(); localStorage.setItem('rppro_server_ip',serverIP); updateServerStatus('Connecting...',''); fetchMLUpdate(); }
     });
-
-    // Risk Toggle Logic
     document.getElementById('risk-toggle').addEventListener('click', () => {
-        isAggressive = !isAggressive;
-        document.getElementById('risk-track').classList.toggle('active', isAggressive);
-        lbl.innerText = isAggressive ? 'AGGR' : 'CONS';
-        lbl.classList.toggle('active', isAggressive);
+        isAggressive=!isAggressive;
+        document.getElementById('risk-track').classList.toggle('active',isAggressive);
+        lbl.innerText=isAggressive?'AGGR':'CONS'; lbl.classList.toggle('active',isAggressive);
         updateApp();
     });
-
-    // Progression Toggle Logic
     updateProgUI();
-
     document.getElementById('prog-toggle').addEventListener('click', () => {
-        if(progMode === 'MART') progMode = 'FIBO';
-        else if(progMode === 'FIBO') progMode = 'DALE';
-        else if(progMode === 'DALE') progMode = 'AUTO';
-        else progMode = 'MART';
-        updateProgUI();
-        updateApp();
+        const modes = ['FLAT','MART','FIBO','DALE'];
+        progMode = modes[(modes.indexOf(progMode)+1)%modes.length];
+        updateProgUI(); updateApp();
     });
-}
-
-function updateProgUI() {
-    let progLbl = document.getElementById('prog-label');
-    let track = document.getElementById('prog-track');
-    progLbl.innerText = progMode;
-    if(progMode === 'MART') { track.classList.remove('active'); progLbl.classList.remove('active'); track.style.borderColor=''; progLbl.style.color=''; }
-    else if(progMode === 'FIBO') { track.classList.add('active'); progLbl.classList.add('active'); track.style.borderColor=''; progLbl.style.color=''; }
-    else if(progMode === 'DALE') { track.classList.add('active'); progLbl.classList.remove('active'); track.style.borderColor='#69f0ae'; progLbl.style.color=''; }
-    else { track.classList.add('active'); progLbl.classList.add('active'); track.style.borderColor='#00e5ff'; progLbl.style.color='#00e5ff'; } // AUTO
-}
-
-function updateServerStatus(text, statusItem) {
-    document.getElementById('status-text').innerText = text;
-    let dot = document.getElementById('status-dot');
-    if(dot) dot.className = 'status-dot ' + statusItem;
-}
-
-function getBetAmount(progSteps, mult, type) {
-    let modeToUse = progMode;
-    
-    // AI Intelligent Progression Switching
-    if (progMode === 'AUTO') {
-        if (progSteps >= 3) modeToUse = 'FIBO'; // Deep Loss Streak -> Survive with Fibo
-        else if (progSteps > 0) modeToUse = 'MART'; // Early Loss -> Aggressive recover
-        else modeToUse = 'DALE'; // Winning or Baseline -> Lock in profits safely
-    }
-
-    let amt = 0;
-    if(modeToUse === 'FIBO') {
-        amt = BASE_UNIT * FIB[Math.min(progSteps, FIB.length - 1)];
-    } else if(modeToUse === 'DALE') {
-        amt = BASE_UNIT + (progSteps * (BASE_UNIT / 2)); 
-    } else { // MART
-        if(type === 'math') {
-            amt = Math.ceil(BASE_UNIT * Math.pow(mult, Math.min(progSteps, 5))); // Limit to 5 steps
-            if(amt > 10) amt = Math.round(amt/5)*5;
-        } else {
-            amt = BASE_UNIT * (Math.min(progSteps, 5) + 1);
-        }
-    }
-    return Math.min(amt, MAX_BET);
-
-
     initVoice();
     updateApp();
 }
 
-function loadState() {
-    try {
-        let savedHist = localStorage.getItem('rppro_history');
-        if(savedHist) {
-            spinHistory = JSON.parse(savedHist);
-            if(spinHistory.length > MAX_HISTORY) spinHistory = spinHistory.slice(-MAX_HISTORY);
+function updateProgUI() {
+    let progLbl=document.getElementById('prog-label');
+    let track=document.getElementById('prog-track');
+    progLbl.innerText=progMode;
+    const active=progMode!=='FLAT';
+    track.classList.toggle('active',active); progLbl.classList.toggle('active',active);
+    if(progMode==='DALE'){track.style.borderColor='#69f0ae';}
+    else if(progMode==='FLAT'){track.style.borderColor='#555';}
+    else{track.style.borderColor='';}
+}
+
+function updateServerStatus(text,cls){
+    document.getElementById('status-text').innerText=text;
+    let dot=document.getElementById('status-dot');
+    if(dot) dot.className='status-dot '+cls;
+}
+
+// ============================================================
+// 5-LAYER NUMBER SCORING ENGINE (unchanged — this is correct)
+// ============================================================
+function computeTopNumbers(liveHistory) {
+    const N=liveHistory.length;
+    const liveTransitions=Array.from({length:37},()=>new Array(37).fill(0));
+    for(let i=0;i<N-1;i++) liveTransitions[liveHistory[i]][liveHistory[i+1]]++;
+    const lastSeen=new Array(37).fill(-1);
+    for(let i=0;i<N;i++) lastSeen[liveHistory[i]]=i;
+    const liveFreq=new Array(37).fill(0);
+    liveHistory.forEach(n=>liveFreq[n]++);
+    const lastNum=N>0?liveHistory[N-1]:-1;
+    const last2Num=N>1?liveHistory[N-2]:-1;
+
+    const combinedTransRow=(from)=>{
+        if(from<0) return new Array(37).fill(0);
+        const combined=new Array(37);
+        for(let t=0;t<=36;t++){
+            const liveW=liveTransitions[from][t]*0.6;
+            const histRow=BASE_TRANSITIONS[from].reduce((a,b)=>a+b,0)||1;
+            const histW=(BASE_TRANSITIONS[from][t]/histRow)*(N>0?N*0.4:10);
+            combined[t]=liveW+histW;
         }
-        let savedRisk = localStorage.getItem('rppro_risk');
-        if(savedRisk !== null) isAggressive = (savedRisk === 'true');
-        
-        let savedProg = localStorage.getItem('rppro_prog_mode');
-        if(savedProg !== null) progMode = savedProg;
-    } catch(e) { console.error("Could not load state", e); }
-}
+        return combined;
+    };
 
-function saveState() {
-    try {
-        localStorage.setItem('rppro_history', JSON.stringify(spinHistory));
-        localStorage.setItem('rppro_risk', isAggressive);
-        localStorage.setItem('rppro_prog_mode', progMode);
-    } catch(e) { console.error("Could not save state", e); }
-}
+    const scores=[];
+    for(let n=0;n<=36;n++){
+        // L1: Historical baseline
+        const histScore=(BASE_FREQ[n]/BASE_TOTAL)*37;
+        const L1=histScore*2.5;
 
-function initVoice() {
-    let btn = document.getElementById('btn-voice');
-    if(!SpeechRecognition) {
-        btn.style.display = 'none';
-        return;
-    }
-    
-    recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.lang = 'en-US';
-    recognition.interimResults = false;
-
-    const wordsMap = {"zero":0,"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,"eight":8,"nine":9,"ten":10, "eleven":11, "twelve":12, "thirteen":13, "fourteen":14,"fifteen":15,"sixteen":16,"seventeen":17,"eighteen":18,"nineteen":19,"twenty":20,"thirty":30};
-
-    recognition.onresult = function(event) {
-        let lastResult = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
-        let numMatch = lastResult.match(/\b([0-9]|[1-2][0-9]|3[0-6])\b/);
-        
-        let foundNum = -1;
-        if(numMatch) {
-            foundNum = parseInt(numMatch[1], 10);
-        } else {
-            for(let word in wordsMap) {
-                if(lastResult.includes(word)) { foundNum = wordsMap[word]; break; }
+        // L2: Live recency EMA
+        let liveRecency=0;
+        for(let j=0;j<N;j++){
+            if(liveHistory[j]===n){
+                const age=N-1-j;
+                let w=age<10?1.5:age<25?1.0:0.4;
+                liveRecency+=w;
             }
         }
-        
-        if(foundNum >= 0 && foundNum <= 36) {
-            speakText(`Added ${foundNum}`);
-            addSpin(foundNum);
+        const L2=liveRecency*1.8;
+
+        // L3: Markov Chain
+        let markov=0;
+        if(lastNum>=0){
+            const row1=combinedTransRow(lastNum);
+            const r1Total=row1.reduce((a,b)=>a+b,0)||1;
+            markov+=(row1[n]/r1Total)*37*3.0;
         }
-    };
-    
-    recognition.onend = function() {
-        if(isVoiceEnabled) recognition.start(); // auto-restart if enabled
-    };
-
-    btn.addEventListener('click', () => {
-        isVoiceEnabled = !isVoiceEnabled;
-        if(isVoiceEnabled) {
-            btn.innerHTML = '🎤 ON';
-            btn.classList.add('active');
-            recognition.start();
-            speakText("Voice mode activated");
-        } else {
-            btn.innerHTML = '🎤 OFF';
-            btn.classList.remove('active');
-            recognition.stop();
+        if(last2Num>=0&&lastNum>=0){
+            const diag=liveTransitions[last2Num][lastNum]>0
+                ?(liveTransitions[lastNum][n]/(liveTransitions[last2Num][lastNum]+0.5)):0;
+            markov+=diag*1.5;
         }
-    });
-}
+        const L3=markov;
 
-function speakText(text) {
-    if(!isVoiceEnabled || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    let utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.1;
-    window.speechSynthesis.speak(utterance);
-}
+        // L4: Gap/Due
+        let gapScore=0;
+        const gap=lastSeen[n]>=0?(N-1-lastSeen[n]):N+37;
+        if(gap>37*1.8) gapScore=Math.min((gap/37)*0.8,3.5);
+        else if(gap<8)  gapScore=(8-gap)*0.25;
+        const L4=gapScore*1.2;
 
-function getColorClass(n) {
-    if (n === 0) return 'bg-green';
-    return RED_NUMBERS.includes(n) ? 'bg-red' : 'bg-black';
-}
+        // L5: Wheel sector
+        let sector=0;
+        const wheelIdx=ROULETTE_NUMBERS.indexOf(n);
+        const recent15=liveHistory.slice(-15);
+        for(const rn of recent15){
+            const rnIdx=ROULETTE_NUMBERS.indexOf(rn);
+            if(rnIdx<0)continue;
+            let dist=Math.abs(rnIdx-wheelIdx);
+            if(dist>18)dist=37-dist;
+            if(dist<=3&&dist>0) sector+=(4-dist)*0.35;
+        }
+        const L5=sector*1.5;
 
-function getTextColorClass(n) {
-    if (n === 0) return 'text-green';
-    return RED_NUMBERS.includes(n) ? 'text-red' : 'text-black';
-}
-
-function generateKeypad() {
-    let html = '';
-    for (let i = 1; i <= 36; i++) {
-        html += `<button class="key ${getColorClass(i)}" data-num="${i}">${i}</button>`;
+        scores.push({num:n,score:L1+L2+L3+L4+L5});
     }
-    keypad.insertAdjacentHTML('beforeend', html);
-    
-    document.querySelectorAll('.key').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const num = parseInt(e.target.getAttribute('data-num'));
-            addSpin(num);
-        });
+    const maxS=Math.max(...scores.map(s=>s.score));
+    const minS=Math.min(...scores.map(s=>s.score));
+    const rng=maxS-minS||1;
+    scores.forEach(s=>s.confidence=Math.round(((s.score-minS)/rng)*100));
+    scores.sort((a,b)=>b.score-a.score);
+    return scores;
+}
+
+// ============================================================
+// SMART SINGLE-BET SELECTOR
+// ============================================================
+// The #1 bug fix: instead of betting on 6 things simultaneously,
+// we pick ONLY the single strongest signal each spin.
+// Min 20 spins required before any bet is recommended.
+// ============================================================
+function getBestBet(historySlice) {
+    const N = historySlice.length;
+    if (N < 20) return null; // Need sufficient data
+
+    // Circuit breaker: if 5+ consecutive losses, pause betting
+    if (consecutiveLosses >= 5) return null;
+
+    // Use last 20 spins for outside analysis
+    const w = historySlice.slice(-20);
+    const W = w.length;
+
+    const candidates = [];
+
+    // --- Evaluate Column ---
+    let c1=0,c2=0,c3=0;
+    w.forEach(n=>{if(n===0)return;if(n%3===1)c1++;else if(n%3===2)c2++;else c3++;});
+    const expC=W*(12/37), sdC=Math.sqrt(W*(12/37)*(25/37));
+    const THRESH = isAggressive ? 1.5 : 2.0; // Require 2 SD deviation
+    if(c1>expC+THRESH*sdC) candidates.push({type:'col',label:'Col 1',pred:"<span class='text-blue'>Play Col 1</span>",zScore:(c1-expC)/sdC,payout:3});
+    if(c2>expC+THRESH*sdC) candidates.push({type:'col',label:'Col 2',pred:"<span class='text-gold'>Play Col 2</span>",zScore:(c2-expC)/sdC,payout:3});
+    if(c3>expC+THRESH*sdC) candidates.push({type:'col',label:'Col 3',pred:"<span class='text-green'>Play Col 3</span>",zScore:(c3-expC)/sdC,payout:3});
+
+    // --- Evaluate Dozens ---
+    let d1=0,d2=0,d3=0;
+    w.forEach(n=>{if(n>=1&&n<=12)d1++;else if(n>=13&&n<=24)d2++;else if(n>=25&&n<=36)d3++;});
+    if(d1>expC+THRESH*sdC) candidates.push({type:'doz',label:'1st 12',pred:"<span class='text-blue'>Play 1 to 12</span>",zScore:(d1-expC)/sdC,payout:3});
+    if(d2>expC+THRESH*sdC) candidates.push({type:'doz',label:'2nd 12',pred:"<span class='text-gold'>Play 13 to 24</span>",zScore:(d2-expC)/sdC,payout:3});
+    if(d3>expC+THRESH*sdC) candidates.push({type:'doz',label:'3rd 12',pred:"<span class='text-green'>Play 25 to 36</span>",zScore:(d3-expC)/sdC,payout:3});
+
+    // --- Evaluate Outside (Red/Black/Even/Odd/High/Low) ---
+    let r=0,b=0,e=0,o=0,l=0,h=0;
+    w.forEach(n=>{
+        if(n===0)return;
+        RED_NUMBERS.includes(n)?r++:b++;
+        n%2===0?e++:o++;
+        n<=18?l++:h++;
+    });
+    const expH=W*(18/37), sdH=Math.sqrt(W*(18/37)*(19/37));
+    const THRESH_H = isAggressive ? 1.3 : 1.8;
+    const outCands=[
+        {label:'RED',  pred:"<span class='text-red'>Play RED</span>",  hits:r,payout:2},
+        {label:'BLK',  pred:"Play BLACK",                               hits:b,payout:2},
+        {label:'EVEN', pred:"<span class='text-gold'>Play EVEN</span>", hits:e,payout:2},
+        {label:'ODD',  pred:"<span class='text-gold'>Play ODD</span>",  hits:o,payout:2},
+        {label:'LOW',  pred:"<span class='text-blue'>Play 1-18</span>", hits:l,payout:2},
+        {label:'HIGH', pred:"<span class='text-green'>Play 19-36</span>",hits:h,payout:2},
+    ];
+    outCands.forEach(c=>{
+        const z=(c.hits-expH)/sdH;
+        if(z>THRESH_H) candidates.push({type:'out',label:c.label,pred:c.pred,zScore:z,payout:2});
+    });
+
+    // Last 5 streak override (4/5 matching = strong signal)
+    const last5=historySlice.slice(-5);
+    let r5=0,b5=0,e5=0,o5=0,l5=0,h5=0;
+    last5.forEach(n=>{if(n===0)return;RED_NUMBERS.includes(n)?r5++:b5++;n%2===0?e5++:o5++;n<=18?l5++:h5++;});
+    const streakMap=[
+        {hits:r5,pred:"<span class='text-red'>Play RED</span>",label:'RED',payout:2},
+        {hits:b5,pred:"Play BLACK",label:'BLK',payout:2},
+        {hits:e5,pred:"<span class='text-gold'>Play EVEN</span>",label:'EVEN',payout:2},
+        {hits:o5,pred:"<span class='text-gold'>Play ODD</span>",label:'ODD',payout:2},
+    ];
+    streakMap.forEach(s=>{
+        if(s.hits>=4) candidates.push({type:'streak',label:s.label+'(Streak)',pred:s.pred,zScore:3.5+s.hits,payout:2});
+    });
+
+    if(candidates.length===0) return null;
+
+    // Pick the single highest z-score bet
+    candidates.sort((a,b)=>b.zScore-a.zScore);
+    return candidates[0];
+}
+
+// ============================================================
+// BET SIZING — much more conservative
+// ============================================================
+function getBetAmount(losses) {
+    if(progMode==='FLAT') return BASE_UNIT;
+    if(progMode==='FIBO') return BASE_UNIT * FIB[Math.min(losses, FIB.length-1)];
+    if(progMode==='DALE') return Math.min(BASE_UNIT + losses * 5, MAX_BET);
+    // MART — limited to 4 steps max
+    return Math.min(BASE_UNIT * Math.pow(2, Math.min(losses, 4)), MAX_BET);
+}
+
+// ============================================================
+// STATE
+// ============================================================
+function loadState() {
+    try {
+        let h=localStorage.getItem('rppro_history');
+        if(h){spinHistory=JSON.parse(h);if(spinHistory.length>MAX_HISTORY)spinHistory=spinHistory.slice(-MAX_HISTORY);}
+        let r=localStorage.getItem('rppro_risk'); if(r!==null)isAggressive=(r==='true');
+        let p=localStorage.getItem('rppro_prog_mode'); if(p!==null)progMode=p;
+    } catch(e){}
+}
+function saveState(){
+    try{
+        localStorage.setItem('rppro_history',JSON.stringify(spinHistory));
+        localStorage.setItem('rppro_risk',isAggressive);
+        localStorage.setItem('rppro_prog_mode',progMode);
+    }catch(e){}
+}
+
+// ============================================================
+// VOICE
+// ============================================================
+function initVoice(){
+    let btn=document.getElementById('btn-voice');
+    if(!SpeechRecognition){btn.style.display='none';return;}
+    recognition=new SpeechRecognition();
+    recognition.continuous=true; recognition.lang='en-US'; recognition.interimResults=false;
+    const wmap={"zero":0,"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,"eight":8,"nine":9,"ten":10,"eleven":11,"twelve":12,"thirteen":13,"fourteen":14,"fifteen":15,"sixteen":16,"seventeen":17,"eighteen":18,"nineteen":19,"twenty":20,"thirty":30};
+    recognition.onresult=function(evt){
+        let res=evt.results[evt.results.length-1][0].transcript.trim().toLowerCase();
+        let m=res.match(/\b([0-9]|[1-2][0-9]|3[0-6])\b/);
+        let found=-1;
+        if(m)found=parseInt(m[1],10);else{for(let w in wmap)if(res.includes(w)){found=wmap[w];break;}}
+        if(found>=0&&found<=36){speakText(`Added ${found}`);addSpin(found);}
+    };
+    recognition.onend=()=>{if(isVoiceEnabled)recognition.start();};
+    btn.addEventListener('click',()=>{
+        isVoiceEnabled=!isVoiceEnabled;
+        if(isVoiceEnabled){btn.innerHTML='🎤 ON';btn.classList.add('active');recognition.start();speakText("Voice active");}
+        else{btn.innerHTML='🎤 OFF';btn.classList.remove('active');recognition.stop();}
     });
 }
+function speakText(text){if(!isVoiceEnabled||!window.speechSynthesis)return;window.speechSynthesis.cancel();let u=new SpeechSynthesisUtterance(text);u.rate=1.1;window.speechSynthesis.speak(u);}
 
-function addSpin(n) {
-    if (spinHistory.length >= MAX_HISTORY) spinHistory.shift();
-    spinHistory.push(n);
-    updateApp();
+// ============================================================
+// UTILS
+// ============================================================
+function getColorClass(n){if(n===0)return 'bg-green';return RED_NUMBERS.includes(n)?'bg-red':'bg-black';}
+function getTextColorClass(n){if(n===0)return 'text-green';return RED_NUMBERS.includes(n)?'text-red':'text-black';}
+
+function generateKeypad(){
+    let html='';
+    for(let i=1;i<=36;i++) html+=`<button class="key ${getColorClass(i)}" data-num="${i}">${i}</button>`;
+    keypad.insertAdjacentHTML('beforeend',html);
+    document.querySelectorAll('.key').forEach(btn=>btn.addEventListener('click',e=>addSpin(parseInt(e.target.getAttribute('data-num')))));
 }
 
-function undoSpin() {
-    if (spinHistory.length > 0) spinHistory.pop();
-    updateApp();
-}
+function addSpin(n){if(spinHistory.length>=MAX_HISTORY)spinHistory.shift();spinHistory.push(n);updateApp();}
+function undoSpin(){if(spinHistory.length>0)spinHistory.pop();updateApp();}
 
-function updateApp() {
-    saveState();
-
-    document.getElementById('spin-count').innerText = spinHistory.length;
-    tape.innerHTML = '';
-    if (spinHistory.length === 0) {
-        tape.innerHTML = '<div class="chip-placeholder">Input spins below</div>';
-    } else {
-        [...spinHistory].reverse().forEach((n, idx) => {
-            let el = document.createElement('div');
-            el.className = `chip ${getColorClass(n)} ${idx === 0 ? 'newest' : ''}`;
-            el.innerText = n;
-            tape.appendChild(el);
-        });
-    }
-
-    runAnalyticsAndBetting();
-}
-
-function resetUI() {
-    [1,2,3].forEach(i => {
-        document.getElementById(`pred-${i}`).innerHTML = '--'; 
-        document.getElementById(`pred-${i}`).className = 'val';
-        document.getElementById(`bet-${i}`).innerHTML = 'Wait';
-        document.getElementById(`bet-${i}`).className = 'bet-amt';
-        document.getElementById(`box-pred-${i}`).classList.remove('active-bet');
-    });
-    
-    ['column', 'dozen', 'outside', 'voisins', 'tiers', 'orphelins'].forEach(id => {
-        let pEl = document.getElementById(`pred-${id}`);
-        let bEl = document.getElementById(`bet-${id}`);
-        let bxEl = document.getElementById(`box-${id}`);
-        if(pEl) pEl.innerHTML = 'Need 5+';
-        if(bEl) {
-            bEl.innerHTML = '--';
-            bEl.className = 'bet-amt mt-5';
-        }
-        if(bxEl) bxEl.classList.remove('active-bet');
-    });
-
-    document.getElementById('streak-alert').innerHTML = 'None';
-    document.getElementById('dealer-sig').innerHTML = 'Analyzing...';
-    
-    updateBar('red', 'black', 0, 0);
-    updateBar('d1', 'd2', 0, 0, 0);
-    document.getElementById('bar-d3').style.width = '33.3%';
-
-    renderChart([0]);
-    let balEl = document.getElementById('balance-display');
-    balEl.innerText = `0 Pts`;
-    balEl.style.color = '#888';
-}
-
-function satisfiesPrediction(n, pred) {
-    if(!pred || pred === 'Wait') return false;
-    let plainPred = pred.replace(/<[^>]*>?/gm, ''); 
-    if(plainPred.includes('Col 1') && n!==0 && n%3===1) return true;
-    if(plainPred.includes('Col 2') && n!==0 && n%3===2) return true;
-    if(plainPred.includes('Col 3') && n!==0 && n%3===0) return true;
-    if(plainPred.includes('1 to 12') && n>=1 && n<=12) return true;
-    if(plainPred.includes('13 to 24') && n>=13 && n<=24) return true;
-    if(plainPred.includes('25 to 36') && n>=25 && n<=36) return true;
-    if(plainPred.includes('RED') && RED_NUMBERS.includes(n)) return true;
-    if(plainPred.includes('BLACK') && !RED_NUMBERS.includes(n) && n!==0) return true;
-    if(plainPred.includes('EVEN') && n%2===0 && n!==0) return true;
-    if(plainPred.includes('ODD') && n%2!==0 && n!==0) return true;
-    if(plainPred.includes('Low') && n>=1 && n<=18) return true;
-    if(plainPred.includes('High') && n>=19 && n<=36) return true;
-    
-    // French Bets
-    if(plainPred.includes('Voisins') && VOISINS.includes(n)) return true;
-    if(plainPred.includes('Tiers') && TIERS.includes(n)) return true;
-    if(plainPred.includes('Orphelins') && ORPHELINS.includes(n)) return true;
-    
+// ============================================================
+// VIRTUAL PnL — Now uses Smart Single Bet
+// ============================================================
+function satisfiesBet(n, bet) {
+    if(!bet) return false;
+    const label = bet.label;
+    if(label==='Col 1')                               return n!==0&&n%3===1; // Bug fixed: was duplicated
+    if(label==='Col 2')                               return n!==0&&n%3===2;
+    if(label==='Col 3')                               return n!==0&&n%3===0;
+    if(label==='1st 12')                              return n>=1&&n<=12;
+    if(label==='2nd 12')                              return n>=13&&n<=24;
+    if(label==='3rd 12')                              return n>=25&&n<=36;
+    if(label==='RED'||label==='RED(Streak)')          return RED_NUMBERS.includes(n);
+    if(label==='BLK'||label==='BLK(Streak)')          return !RED_NUMBERS.includes(n)&&n!==0;
+    if(label==='EVEN'||label==='EVEN(Streak)')        return n%2===0&&n!==0;
+    if(label==='ODD'||label==='ODD(Streak)')          return n%2!==0&&n!==0;
+    if(label==='LOW')                                  return n>=1&&n<=18;
+    if(label==='HIGH')                                 return n>=19&&n<=36;
     return false;
 }
 
-function getPredictionsForHistory(historySlice) {
-    if(historySlice.length < 5) return { col: 'Wait', doz: 'Wait', out: 'Wait', french: { v: 'Wait', t: 'Wait', o: 'Wait' } };
-    
-    // Using Standard Deviation to find statistically significant hot/cold bets
-    const N = historySlice.length;
-    // For 1/3 bets (Columns, Dozens): expected = N*(12/37), SD = sqrt(N * p * q) = sqrt(N * (12/37) * (25/37))
-    const expectedThird = N * (12/37);
-    const sdThird = Math.sqrt(N * (12/37) * (25/37));
-    
-    // For 1/2 bets (Outside): expected = N*(18/37), SD = sqrt(N * (18/37) * (19/37))
-    const expectedHalf = N * (18/37);
-    const sdHalf = Math.sqrt(N * (18/37) * (19/37));
-
-    const sdThresh = isAggressive ? 1.0 : 1.5;
-    
-    // Columns
-    let c1=0, c2=0, c3=0;
-    historySlice.forEach(n => {
-        if(n===0) return;
-        if(n%3===1) c1++; else if(n%3===2) c2++; else if(n%3===0) c3++;
-    });
-    
-    let cText = "Wait";
-    // Check if any column is "Hot" (Hits > Expected + SD)
-    if(c1 > expectedThird + sdThresh*sdThird) cText = "<span class='text-blue'>Play Col 1</span>";
-    else if(c2 > expectedThird + sdThresh*sdThird) cText = "<span class='text-gold'>Play Col 2</span>";
-    else if(c3 > expectedThird + sdThresh*sdThird) cText = "<span class='text-green'>Play Col 3</span>";
-    // Alternatively check if "Due/Cold" (Hits < Expected - SD) if we want a mean reversion strategy?
-    // Let's stick to hot for columns for now, or pick the hottest.
-    else {
-        let maxC = Math.max(c1, c2, c3);
-        if(maxC === c1 && c1 > expectedThird + 0.5*sdThird) cText = "<span class='text-blue'>Play Col 1</span>";
-        else if(maxC === c2 && c2 > expectedThird + 0.5*sdThird) cText = "<span class='text-gold'>Play Col 2</span>";
-        else if(maxC === c3 && c3 > expectedThird + 0.5*sdThird) cText = "<span class='text-green'>Play Col 3</span>";
-    }
-
-    // Dozens
-    let d1=0, d2=0, d3=0;
-    historySlice.forEach(n => {
-        if(n>=1 && n<=12) d1++; else if(n>=13 && n<=24) d2++; else if(n>=25 && n<=36) d3++;
-    });
-    let dText = "Wait";
-    if(d1 > expectedThird + sdThresh*sdThird) dText = "<span class='text-blue'>Play 1 to 12</span>";
-    else if(d2 > expectedThird + sdThresh*sdThird) dText = "<span class='text-gold'>Play 13 to 24</span>";
-    else if(d3 > expectedThird + sdThresh*sdThird) dText = "<span class='text-green'>Play 25 to 36</span>";
-    else {
-        let maxD = Math.max(d1, d2, d3);
-        if(maxD === d1 && d1 > expectedThird + 0.5*sdThird) dText = "<span class='text-blue'>Play 1 to 12</span>";
-        else if(maxD === d2 && d2 > expectedThird + 0.5*sdThird) dText = "<span class='text-gold'>Play 13 to 24</span>";
-        else if(maxD === d3 && d3 > expectedThird + 0.5*sdThird) dText = "<span class='text-green'>Play 25 to 36</span>";
-    }
-
-    // Outside
-    let r=0, b=0, e=0, o=0, l=0, h=0;
-    historySlice.forEach(n => {
-        if(n===0)return;
-        if(RED_NUMBERS.includes(n)) r++; else b++;
-        if(n%2===0) e++; else o++;
-        if(n<=18) l++; else h++;
-    });
-    
-    let outScore = 0;
-    let oText = "Wait";
-    // Find the most statistically significant deviation
-    const devs = [
-        {name: "<span class='text-red'>Play RED</span>", hits: r},
-        {name: "Play BLACK", hits: b},
-        {name: "<span class='text-gold'>Play EVEN</span>", hits: e},
-        {name: "<span class='text-gold'>Play ODD</span>", hits: o},
-        {name: "<span class='text-blue'>Play 1-18 (Low)</span>", hits: l},
-        {name: "<span class='text-green'>Play 19-36 (High)</span>", hits: h}
-    ];
-    
-    devs.sort((a,b) => b.hits - a.hits);
-    if(devs[0].hits > expectedHalf + (sdThresh * sdHalf * 0.8)) {
-        oText = devs[0].name;
-    }
-
-    // French Bets
-    let v=0, t=0, o_cnt=0;
-    historySlice.forEach(n => {
-        if(VOISINS.includes(n)) v++;
-        else if(TIERS.includes(n)) t++;
-        else if(ORPHELINS.includes(n)) o_cnt++;
-    });
-
-    const expectedV = N * (17/37); const sdV = Math.sqrt(N * (17/37) * (20/37));
-    const expectedT = N * (12/37); const sdT = Math.sqrt(N * (12/37) * (25/37));
-    const expectedO = N * (8/37);  const sdO = Math.sqrt(N * (8/37) * (29/37));
-
-    let fText = { v: 'Wait', t: 'Wait', o: 'Wait' };
-    if(v > expectedV + sdThresh*sdV*0.8) fText.v = "<span class='text-gold'>Play Voisins</span>";
-    if(t > expectedT + sdThresh*sdT*0.8) fText.t = "<span class='text-blue'>Play Tiers</span>";
-    if(o_cnt > expectedO + sdThresh*sdO*0.8) fText.o = "<span class='text-green'>Play Orphelins</span>";
-
-    return { col: cText, doz: dText, out: oText, french: fText };
+function satisfiesPrediction(n, pred) {
+    if(!pred||pred==='Wait') return false;
+    let p=pred.replace(/<[^>]*>?/gm,'');
+    if(p.includes('Col 1')&&n!==0&&n%3===1)  return true;
+    if(p.includes('Col 2')&&n!==0&&n%3===2)  return true;
+    if(p.includes('Col 3')&&n!==0&&n%3===0)  return true;
+    if(p.includes('1 to 12')&&n>=1&&n<=12)   return true;
+    if(p.includes('13 to 24')&&n>=13&&n<=24) return true;
+    if(p.includes('25 to 36')&&n>=25&&n<=36) return true;
+    if(p.includes('RED')&&RED_NUMBERS.includes(n)) return true;
+    if(p.includes('BLACK')&&!RED_NUMBERS.includes(n)&&n!==0)return true;
+    if(p.includes('EVEN')&&n%2===0&&n!==0)   return true;
+    if(p.includes('ODD')&&n%2!==0&&n!==0)    return true;
+    if(p.includes('1-18')&&n>=1&&n<=18)       return true;
+    if(p.includes('19-36')&&n>=19&&n<=36)     return true;
+    return false;
 }
 
 function calculatePnL(spins) {
-    if(spins.length < 5) return [0];
-    let balance = 0;
-    let bHist = [0];
-    
-    let prog = { column: 0, dozen: 0, outside: 0, v: 0, t: 0, o: 0 };
-    for(let i = 5; i < spins.length; i++) {
-        let hAtPoint = spins.slice(0, i);
-        let preds = getPredictionsForHistory(hAtPoint);
-        let actual = spins[i];
-        
-        let stepCost = 0;
-        let stepWin = 0;
-        
-        if(preds.col !== 'Wait') {
-            let amt = getBetAmount(prog.column, 1.5, 'math');
-            stepCost += amt;
-            if(satisfiesPrediction(actual, preds.col)) { stepWin += (amt * 3); prog.column = 0; } 
-            else prog.column = Math.min(prog.column + 1, 8);
-        }
-        if(preds.doz !== 'Wait') {
-            let amt = getBetAmount(prog.dozen, 1.5, 'math');
-            stepCost += amt;
-            if(satisfiesPrediction(actual, preds.doz)) { stepWin += (amt * 3); prog.dozen = 0; } 
-            else prog.dozen = Math.min(prog.dozen + 1, 8);
-        }
-        if(preds.out !== 'Wait') {
-            let amt = getBetAmount(prog.outside, 2.0, 'math');
-            stepCost += amt;
-            if(satisfiesPrediction(actual, preds.out)) { stepWin += (amt * 2); prog.outside = 0; } 
-            else prog.outside = Math.min(prog.outside + 1, 10);
-        }
+    // Bug fix: was 20, now 8 — chart starts populating earlier
+    if(spins.length < 8) return [0];
+    let balance=0, bHist=[0];
+    let lossStreak=0;
+    let betLoss=0;
 
-        if(preds.french.v !== 'Wait') {
-            let amt = getBetAmount(prog.v, 1.0, 'flat');
-            stepCost += amt;
-            if(satisfiesPrediction(actual, preds.french.v)) { stepWin += (amt * 2); prog.v = 0; } 
-            else prog.v = Math.min(prog.v + 1, 8);
+    for(let i=8;i<spins.length;i++){
+        const hist=spins.slice(0,i);
+        const bet=getBestBetSimple(hist, lossStreak);
+        const actual=spins[i];
+
+        if(!bet){ bHist.push(balance); continue; } // No signal → skip
+
+        const amt=getBetAmount(betLoss);
+        if(satisfiesBet(actual,bet)){
+            balance += amt*(bet.payout-1);
+            betLoss=0; lossStreak=0;
+        } else {
+            balance -= amt;
+            betLoss++; lossStreak++;
+            if(lossStreak>=5) lossStreak=0;
         }
-        if(preds.french.t !== 'Wait') {
-            let amt = getBetAmount(prog.t, 1.0, 'flat');
-            stepCost += amt;
-            if(satisfiesPrediction(actual, preds.french.t)) { stepWin += (amt * 3); prog.t = 0; } 
-            else prog.t = Math.min(prog.t + 1, 8);
-        }
-        if(preds.french.o !== 'Wait') {
-            let amt = getBetAmount(prog.o, 1.0, 'flat');
-            stepCost += amt;
-            if(satisfiesPrediction(actual, preds.french.o)) { stepWin += (amt * 4); prog.o = 0; } 
-            else prog.o = Math.min(prog.o + 1, 8);
-        }
-        
-        balance = balance - stepCost + stepWin;
         bHist.push(balance);
     }
     return bHist;
 }
 
-function renderChart(dataArr) {
-    let ctx = document.getElementById('pnlChart');
-    if(!ctx) return;
-    
-    let labels = dataArr.map((_, i) => i);
-    let color = dataArr[dataArr.length-1] >= 0 ? '#69f0ae' : '#ff5252';
+// Simplified version for PnL simulation (no DOM access)
+function getBestBetSimple(historySlice, lossStreak) {
+    const N=historySlice.length;
+    if(N<20||lossStreak>=5) return null;
+    const w=historySlice.slice(-20);
+    const W=w.length;
+    const candidates=[];
 
-    if(pnlChartInstance) {
-        pnlChartInstance.data.labels = labels;
-        pnlChartInstance.data.datasets[0].data = dataArr;
-        pnlChartInstance.data.datasets[0].borderColor = color;
+    let c1=0,c2=0,c3=0;
+    w.forEach(n=>{if(n===0)return;if(n%3===1)c1++;else if(n%3===2)c2++;else c3++;});
+    const expC=W*(12/37),sdC=Math.sqrt(W*(12/37)*(25/37));
+    const THRESH=2.0;
+    if(c1>expC+THRESH*sdC) candidates.push({type:'col',label:'Col 1',zScore:(c1-expC)/sdC,payout:3});
+    if(c2>expC+THRESH*sdC) candidates.push({type:'col',label:'Col 2',zScore:(c2-expC)/sdC,payout:3});
+    if(c3>expC+THRESH*sdC) candidates.push({type:'col',label:'Col 3',zScore:(c3-expC)/sdC,payout:3});
+
+    let d1=0,d2=0,d3=0;
+    w.forEach(n=>{if(n>=1&&n<=12)d1++;else if(n>=13&&n<=24)d2++;else if(n>=25&&n<=36)d3++;});
+    if(d1>expC+THRESH*sdC) candidates.push({type:'doz',label:'1st 12',zScore:(d1-expC)/sdC,payout:3});
+    if(d2>expC+THRESH*sdC) candidates.push({type:'doz',label:'2nd 12',zScore:(d2-expC)/sdC,payout:3});
+    if(d3>expC+THRESH*sdC) candidates.push({type:'doz',label:'3rd 12',zScore:(d3-expC)/sdC,payout:3});
+
+    let r=0,b=0,e=0,o=0,l=0,h=0;
+    w.forEach(n=>{if(n===0)return;RED_NUMBERS.includes(n)?r++:b++;n%2===0?e++:o++;n<=18?l++:h++;});
+    const expH=W*(18/37),sdH=Math.sqrt(W*(18/37)*(19/37));
+    const THRESH_H=1.8;
+    const outs=[{label:'RED',hits:r,payout:2},{label:'BLK',hits:b,payout:2},{label:'EVEN',hits:e,payout:2},{label:'ODD',hits:o,payout:2},{label:'LOW',hits:l,payout:2},{label:'HIGH',hits:h,payout:2}];
+    outs.forEach(c=>{const z=(c.hits-expH)/sdH;if(z>THRESH_H)candidates.push({type:'out',label:c.label,zScore:z,payout:2});});
+
+    // Streak
+    const last5=historySlice.slice(-5);
+    let r5=0,b5=0,e5=0,o5=0;
+    last5.forEach(n=>{if(n===0)return;RED_NUMBERS.includes(n)?r5++:b5++;n%2===0?e5++:o5++;});
+    if(r5>=4) candidates.push({type:'streak',label:'RED(Streak)',zScore:4+r5,payout:2});
+    if(b5>=4) candidates.push({type:'streak',label:'BLK(Streak)',zScore:4+b5,payout:2});
+    if(e5>=4) candidates.push({type:'streak',label:'EVEN(Streak)',zScore:4+e5,payout:2});
+    if(o5>=4) candidates.push({type:'streak',label:'ODD(Streak)',zScore:4+o5,payout:2});
+
+    if(candidates.length===0) return null;
+    candidates.sort((a,b)=>b.zScore-a.zScore);
+    return candidates[0];
+}
+
+// ============================================================
+// CHART
+// ============================================================
+function renderChart(dataArr){
+    let ctx=document.getElementById('pnlChart');
+    if(!ctx)return;
+    let labels=dataArr.map((_,i)=>i);
+    let color=dataArr[dataArr.length-1]>=0?'#69f0ae':'#ff5252';
+    if(pnlChartInstance){
+        pnlChartInstance.data.labels=labels;
+        pnlChartInstance.data.datasets[0].data=dataArr;
+        pnlChartInstance.data.datasets[0].borderColor=color;
+        pnlChartInstance.data.datasets[0].backgroundColor=color==='#69f0ae'?'rgba(105,240,174,0.08)':'rgba(255,82,82,0.08)';
         pnlChartInstance.update();
     } else {
-        Chart.defaults.color = '#888';
-        Chart.defaults.font.family = 'Montserrat';
-        pnlChartInstance = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: labels,
-                datasets: [{
-                    label: 'Virtual PnL',
-                    data: dataArr,
-                    borderColor: color,
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    tension: 0.2
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                    x: { display: false },
-                    y: { 
-                        display: true, 
-                        grid: { color: 'rgba(255,255,255,0.05)' }
-                    }
-                }
-            }
+        Chart.defaults.color='#888';Chart.defaults.font.family='Montserrat';
+        pnlChartInstance=new Chart(ctx,{
+            type:'line',
+            data:{labels,datasets:[{label:'Virtual PnL',data:dataArr,borderColor:color,borderWidth:2,pointRadius:0,tension:0.3,fill:true,backgroundColor:'rgba(105,240,174,0.08)'}]},
+            options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{display:false},y:{display:true,grid:{color:'rgba(255,255,255,0.05)'}}}}
         });
     }
 }
 
-function runAnalyticsAndBetting() {
-    const len = spinHistory.length;
-    if (len < 5) {
-        resetUI();
-        return;
+// ============================================================
+// MAIN UPDATE
+// ============================================================
+function updateApp(){
+    saveState();
+    document.getElementById('spin-count').innerText=spinHistory.length;
+    tape.innerHTML='';
+    if(spinHistory.length===0){
+        tape.innerHTML='<div class="chip-placeholder">Input spins below</div>';
+    } else {
+        [...spinHistory].reverse().forEach((n,idx)=>{
+            let el=document.createElement('div');
+            el.className=`chip ${getColorClass(n)} ${idx===0?'newest':''}`;
+            el.innerText=n; tape.appendChild(el);
+        });
     }
+    runAnalyticsAndBetting();
+}
 
-    // 1. Calculate Progression
-    let prog = { column: 0, dozen: 0, outside: 0, v: 0, t: 0, o: 0 };
-    for(let i = 5; i < spinHistory.length; i++) {
-        let historyAtThatPoint = spinHistory.slice(0, i);
-        let preds = getPredictionsForHistory(historyAtThatPoint);
-        let actualHit = spinHistory[i];
-        
-        if(preds.col !== 'Wait') {
-            if(satisfiesPrediction(actualHit, preds.col)) prog.column = 0;
-            else prog.column = Math.min(prog.column + 1, 8);
-        }
-        if(preds.doz !== 'Wait') {
-            if(satisfiesPrediction(actualHit, preds.doz)) prog.dozen = 0;
-            else prog.dozen = Math.min(prog.dozen + 1, 8);
-        }
-        if(preds.out !== 'Wait') {
-            if(satisfiesPrediction(actualHit, preds.out)) prog.outside = 0;
-            else prog.outside = Math.min(prog.outside + 1, 10);
-        }
-        if(preds.french.v !== 'Wait') {
-            if(satisfiesPrediction(actualHit, preds.french.v)) prog.v = 0;
-            else prog.v = Math.min(prog.v + 1, 8);
-        }
-        if(preds.french.t !== 'Wait') {
-            if(satisfiesPrediction(actualHit, preds.french.t)) prog.t = 0;
-            else prog.t = Math.min(prog.t + 1, 8);
-        }
-        if(preds.french.o !== 'Wait') {
-            if(satisfiesPrediction(actualHit, preds.french.o)) prog.o = 0;
-            else prog.o = Math.min(prog.o + 1, 8);
-        }
-    }
+function updateBar(id1,id2,v1,v2,tot){
+    let p1=50,p2=50;
+    if(tot>0){p1=Math.round((v1/tot)*100);p2=Math.round((v2/tot)*100);}
+    else{p1=0;p2=0;}
+    let e1=document.getElementById(`pct-${id1}`);if(e1)e1.innerText=`${p1}%`;
+    let e2=document.getElementById(`pct-${id2}`);if(e2)e2.innerText=`${p2}%`;
+    let b1=document.getElementById(`bar-${id1}`);if(b1)b1.style.width=`${tot>0?p1:50}%`;
+}
 
-    // 2. Current Predictions
-    let currentPreds = getPredictionsForHistory(spinHistory);
-    let areas = [
-        { id: 'column', html: currentPreds.col, p: prog.column, mult: 1.5, type: 'math' },
-        { id: 'dozen', html: currentPreds.doz, p: prog.dozen, mult: 1.5, type: 'math' },
-        { id: 'outside', html: currentPreds.out, p: prog.outside, mult: 2.0, type: 'math' },
-        { id: 'voisins', html: currentPreds.french.v, p: prog.v, mult: 1.0, type: 'flat' },
-        { id: 'tiers', html: currentPreds.french.t, p: prog.t, mult: 1.0, type: 'flat' },
-        { id: 'orphelins', html: currentPreds.french.o, p: prog.o, mult: 1.0, type: 'flat' }
-    ];
+function resetUI(){
+    [1,2,3].forEach(i=>{
+        document.getElementById(`pred-${i}`).innerHTML='--';
+        document.getElementById(`pred-${i}`).className='val';
+        document.getElementById(`bet-${i}`).innerHTML='Wait';
+        document.getElementById(`bet-${i}`).className='bet-amt';
+        document.getElementById(`box-pred-${i}`).classList.remove('active-bet','highly-confident-bet');
+    });
+    ['column','dozen','outside','voisins','tiers','orphelins'].forEach(id=>{
+        let pEl=document.getElementById(`pred-${id}`); if(pEl)pEl.innerHTML='Need 20+';
+        let bEl=document.getElementById(`bet-${id}`); if(bEl){bEl.innerHTML='--';bEl.className='bet-amt mt-5';}
+        let bxEl=document.getElementById(`box-${id}`); if(bxEl)bxEl.classList.remove('active-bet');
+    });
+    document.getElementById('streak-alert').innerHTML='None';
+    document.getElementById('dealer-sig').innerHTML='Analyzing...';
+    updateBar('red','black',0,0,0);
+    ['d1','d2','d3'].forEach(id=>{
+        let e=document.getElementById(`pct-${id}`);if(e)e.innerText='0%';
+        let b=document.getElementById(`bar-${id}`);if(b)b.style.width='33.3%';
+    });
+    renderChart([0]);
+    let bal=document.getElementById('balance-display');
+    bal.innerText='0 Pts';bal.style.color='#888';
+}
 
-    let spokenAlerts = [];
+function runAnalyticsAndBetting(){
+    const len=spinHistory.length;
+    if(len<5){resetUI();return;}
 
-    areas.forEach(ar => {
-        let pEl = document.getElementById(`pred-${ar.id}`);
-        let box = document.getElementById(`box-${ar.id}`);
-        let betEl = document.getElementById(`bet-${ar.id}`);
-        
-        if(!pEl) return;
-        pEl.innerHTML = ar.html;
-        
-        if(ar.html !== 'Wait') {
-            let bet = getBetAmount(ar.p, ar.mult, ar.type);
-            
-            betEl.innerHTML = `Bet ${bet} Pts`;
-            betEl.className = 'bet-amt hot mt-5';
+    // ---- 1. Top 3 Numbers (5-Layer Engine) ----
+    const topNums=computeTopNumbers(spinHistory);
+    for(let i=1;i<=3;i++){
+        const pick=topNums[i-1];
+        const el=document.getElementById(`pred-${i}`);
+        const box=document.getElementById(`box-pred-${i}`);
+        const betEl=document.getElementById(`bet-${i}`);
+        let conf=pick.confidence;
+        let confLabel=conf>=65?` <span style="font-size:10px;color:#ff6b35;">🔥${conf}%</span>`
+                     :conf>=45?` <span style="font-size:10px;color:#ffd700;">⚡${conf}%</span>`
+                     :` <span style="font-size:10px;color:#888;">❄️${conf}%</span>`;
+        el.innerHTML=`${pick.num}${confLabel}`;
+        el.className=`val ${getTextColorClass(pick.num)}`;
+        const betThresh=isAggressive?45:65;
+        if(conf>=betThresh){
+            betEl.innerHTML=`Bet ${BASE_UNIT} Pts`;
+            betEl.className='bet-amt hot';
             box.classList.add('active-bet');
-
-            let plainHtml = ar.html.replace(/<[^>]*>?/gm, '');
-            spokenAlerts.push(`Bet ${bet} on ${plainHtml}`);
+            if(conf>=75)box.classList.add('highly-confident-bet');
+            else box.classList.remove('highly-confident-bet');
         } else {
-            betEl.innerHTML = '--';
-            betEl.className = 'bet-amt mt-5';
-            box.classList.remove('active-bet');
+            betEl.innerHTML='Wait';betEl.className='bet-amt';
+            box.classList.remove('active-bet','highly-confident-bet');
         }
+    }
+
+    // ---- 2. SMART SINGLE BEST BET for outside categories ----
+    // First clear all area boxes
+    ['column','dozen','outside','voisins','tiers','orphelins'].forEach(id=>{
+        let pEl=document.getElementById(`pred-${id}`);
+        let betEl=document.getElementById(`bet-${id}`);
+        let box=document.getElementById(`box-${id}`);
+        if(pEl)pEl.innerHTML=len<20?'Need 20+':'—';
+        if(betEl){betEl.innerHTML='Skip';betEl.className='bet-amt mt-5';}
+        if(box)box.classList.remove('active-bet');
     });
 
-    if(spokenAlerts.length > 0) {
-        speakText(spokenAlerts[spokenAlerts.length - 1]);
+    const bestBet=getBestBet(spinHistory);
+    let circuitLabel=consecutiveLosses>=5?`<span style='color:#ff5252;font-size:10px'>⚠️ Circuit Break (${consecutiveLosses} losses)</span>`:'';
+
+    if(bestBet){
+        // Show best bet in the appropriate box
+        let targetId;
+        if(bestBet.type==='col')    targetId='column';
+        else if(bestBet.type==='doz') targetId='dozen';
+        else                          targetId='outside'; // out or streak
+
+        let pEl=document.getElementById(`pred-${targetId}`);
+        let betEl=document.getElementById(`bet-${targetId}`);
+        let box=document.getElementById(`box-${targetId}`);
+
+        if(pEl) pEl.innerHTML=bestBet.pred;
+        if(betEl){
+            const betAmt=getBetAmount(0); // flat
+            betEl.innerHTML=`Bet ${betAmt} Pts ${circuitLabel}`;
+            betEl.className='bet-amt hot mt-5';
+        }
+        if(box) box.classList.add('active-bet');
+
+        // Show z-score in tiers box as info
+        let tiersEl=document.getElementById('pred-tiers');
+        if(tiersEl) tiersEl.innerHTML=`<span style='font-size:10px;color:#aaa'>Strength: ${bestBet.zScore.toFixed(2)}σ</span>`;
+
+        // Show "no other bets" in others to clarify
+        let vEl=document.getElementById('pred-voisins');
+        if(vEl) vEl.innerHTML=`<span style='font-size:10px;color:#555'>Focused mode</span>`;
+
+        speakText(`${bestBet.pred.replace(/<[^>]*>?/gm,'')} — ${getBetAmount(0)} points`);
+    } else {
+        // No signal → show circuit breaker or waiting message
+        let msg=len<20?'Need 20+ spins':consecutiveLosses>=5?'Circuit Break — Pause':'No Signal — Wait';
+        let colEl=document.getElementById('pred-column');
+        if(colEl) colEl.innerHTML=`<span style='font-size:11px;color:#aaa'>${msg}</span>`;
+        let vEl=document.getElementById('pred-voisins');
+        if(vEl) vEl.innerHTML=circuitLabel||'<span style="font-size:10px;color:#555">—</span>';
     }
 
-    // 3. Single Numbers via Exponential Moving Average + Momentum
-    let scores = [];
-    let N = spinHistory.length;
-    let lastNum = spinHistory[N - 1];
-
-    for(let i=0; i<=36; i++) {
-        let sc = 0;
-        
-        // Momentum & Recency (decaying weight)
-        for(let j=0; j<N; j++) {
-            if(spinHistory[j] === i) {
-                // More recent hits give higher scores (exponential decay)
-                sc += Math.pow(1.05, (j - N + 20)); // Focuses on last 20 spins heavily
-            }
-        }
-        
-        // Transition Bonus
-        for(let j=0; j<N-1; j++) {
-            if(spinHistory[j] === lastNum && spinHistory[j+1] === i) {
-                sc += 2.0;
-            }
-        }
-        
-        // Wheel Neighbors Synergy
-        let idx = ROULETTE_NUMBERS.indexOf(i);
-        let leftN = ROULETTE_NUMBERS[(idx - 1 + 37) % 37];
-        let rightN = ROULETTE_NUMBERS[(idx + 1) % 37];
-        let left2 = ROULETTE_NUMBERS[(idx - 2 + 37) % 37];
-        let right2 = ROULETTE_NUMBERS[(idx + 2) % 37];
-        
-        let neighborHits = 0;
-        let recent10 = spinHistory.slice(-10);
-        recent10.forEach(rn => {
-            if([leftN, rightN, left2, right2].includes(rn)) neighborHits++;
-        });
-        sc += neighborHits * 0.5;
-
-        scores.push({num: i, score: sc});
+    // ---- 3. Streaks ----
+    let stText='None';
+    if(len>=7){
+        let last7=spinHistory.slice(-7);
+        let bC=0,rC=0,eC=0,oC=0;
+        last7.forEach(n=>{if(n!==0){RED_NUMBERS.includes(n)?rC++:bC++;n%2===0?eC++:oC++;}});
+        if(rC>=6) stText="<span class='text-red'>Red Streak 🔥</span>";
+        else if(bC>=6) stText="Black Streak 🔥";
+        else if(eC>=6) stText="<span class='text-gold'>Even Streak</span>";
+        else if(oC>=6) stText="<span class='text-gold'>Odd Streak</span>";
+        else if(rC>=5) stText="<span class='text-red'>Red Trending ↑</span>";
+        else if(bC>=5) stText="Black Trending ↑";
     }
-    
-    scores.sort((a,b) => b.score - a.score);
-    
-    for(let i=1; i<=3; i++) {
-        let el = document.getElementById(`pred-${i}`);
-        let num = scores[i-1].num;
-        let scoreVal = scores[i-1].score;
-        
-        el.innerText = num;
-        el.className = `val ${getTextColorClass(num)}`;
-        
-        let box = document.getElementById(`box-pred-${i}`);
-        let betEl = document.getElementById(`bet-${i}`);
-        
-        let thresh = isAggressive ? 1.0 : 1.8; 
-        if(scoreVal > thresh) {
-            betEl.innerHTML = `Bet ${BASE_UNIT} Pts`;
-            betEl.className = 'bet-amt hot';
-            box.classList.add('active-bet');
-        } else {
-            betEl.innerHTML = 'Wait';
-            betEl.className = 'bet-amt';
-            box.classList.remove('active-bet');
-            box.classList.remove('highly-confident-bet');
+    document.getElementById('streak-alert').innerHTML=stText;
+
+    // ---- 4. Wheel Bias — Always shows TOP 5 HOT NUMBERS ----
+    // Combines historical baseline + live session frequency
+    // This ALWAYS shows something useful, never 'Unclear' or blank.
+    {
+        const liveFreq = new Array(37).fill(0);
+        spinHistory.forEach(n => liveFreq[n]++);
+        const liveW = len > 0 ? len : 1;
+
+        // Combined score: 50% historical baseline + 50% live frequency (normalized)
+        const hotScores = [];
+        for(let n = 0; n <= 36; n++){
+            const histNorm = (BASE_FREQ[n] / BASE_TOTAL) * 37;       // avg = 1.0
+            const liveNorm = (liveFreq[n] / liveW) * 37;             // avg = 1.0
+            const combined = (histNorm * 0.5) + (liveNorm * (len >= 10 ? 0.5 : 0.2));
+            hotScores.push({ num: n, score: combined });
         }
+        hotScores.sort((a, b) => b.score - a.score);
+
+        // Top 5 hot numbers (exclude 0 unless genuinely very hot)
+        const top5 = hotScores.filter(s => s.num !== 0 || s.score > 1.5).slice(0, 5);
+        const top5Nums = top5.map(s => {
+            const col = RED_NUMBERS.includes(s.num) ? '#ff5252' : s.num === 0 ? '#69f0ae' : '#ccc';
+            return `<span style="color:${col};font-weight:bold">${s.num}</span>`;
+        }).join(' · ');
+
+        const label = len >= 10 ? 'Hot Numbers 🔥' : 'Base Bias';
+        document.getElementById('dealer-sig').innerHTML =
+            `<span style="font-size:11px;line-height:1.6">`+
+            `<span style="color:#aaa;font-size:10px">${label}:</span><br>${top5Nums}</span>`;
     }
 
-    // 4. Streaks
-    let recents = spinHistory.slice(-15);
-    let stText = "None";
-    if(recents.length >= 7) {
-        let bCount=0, rCount=0, eCount=0, oCount=0;
-        let last7 = recents.slice(-7);
-        last7.forEach(n => {
-            if(n!==0){
-                if(RED_NUMBERS.includes(n)) rCount++; else bCount++;
-                if(n%2===0) eCount++; else oCount++;
-            }
-        });
-        if(rCount >= 6) stText = "<span class='text-red'>Red Overbought</span>";
-        else if(bCount >= 6) stText = "Black Overbought";
-        else if(eCount >= 6) stText = "<span class='text-gold'>Even Overbought</span>";
-        else if(oCount >= 6) stText = "<span class='text-gold'>Odd Overbought</span>";
-    }
-    document.getElementById('streak-alert').innerHTML = stText;
 
-    // 5. Dealer Signature
-    if (len >= 10) {
-        let distances = [];
-        for(let i=0; i<len-1; i++) {
-            let dist = ROULETTE_NUMBERS.indexOf(spinHistory[i+1]) - ROULETTE_NUMBERS.indexOf(spinHistory[i]);
-            if(dist < 0) dist += 37;
-            distances.push(dist);
-        }
-        let maxHits = 0; let bestStart = -1;
-        for(let start=0; start<=36; start++) {
-            let hits = distances.filter(d => {
-                let end = (start+4)%37;
-                return start<=end ? (d>=start && d<=end) : (d>=start || d<=end);
-            }).length;
-            if(hits > maxHits) { maxHits = hits; bestStart = start; }
-        }
-        let sigText = "Unclear";
-        if(maxHits >= Math.max(3, distances.length * 0.2)) {
-            let lIdx = ROULETTE_NUMBERS.indexOf(spinHistory[spinHistory.length - 1]);
-            let tNums = [0,1,2,3,4].map(off => ROULETTE_NUMBERS[(lIdx + (bestStart+off)%37)%37]).sort((a,b) => a-b);
-            sigText = `<span class="text-gold" style="font-size:11px;">Track: ${tNums.join(',')}</span>`;
-        }
-        document.getElementById('dealer-sig').innerHTML = sigText;
+    // ---- 5. Progress Bars ----
+    let r30=spinHistory.slice(-30);
+    let r=0,bl=0,d1_=0,d2_=0,d3_=0,nz=0;
+    r30.forEach(n=>{if(n===0)return;nz++;RED_NUMBERS.includes(n)?r++:bl++;if(n<=12)d1_++;else if(n<=24)d2_++;else d3_++;});
+    updateBar('red','black',r,bl,nz);
+    if(nz>0){
+        let pd1=Math.round((d1_/nz)*100),pd2=Math.round((d2_/nz)*100);
+        document.getElementById('pct-d1').innerText=`${pd1}%`;
+        document.getElementById('pct-d2').innerText=`${pd2}%`;
+        document.getElementById('pct-d3').innerText=`${100-pd1-pd2}%`;
+        document.getElementById('bar-d1').style.width=`${pd1}%`;
+        document.getElementById('bar-d2').style.width=`${pd2}%`;
+        document.getElementById('bar-d3').style.width=`${100-pd1-pd2}%`;
     }
 
-    // 6. Progress Bars
-    let recentSpins = spinHistory.slice(-30);
-    let r=0, b=0, d1=0, d2=0, d3=0, nonZero=0;
-    
-    recentSpins.forEach(n => {
-        if(n === 0) return;
-        nonZero++;
-        if(RED_NUMBERS.includes(n)) r++; else b++;
-        if(n>=1 && n<=12) d1++; else if(n>=13 && n<=24) d2++; else if(n>=25 && n<=36) d3++;
-    });
-
-    updateBar('red', 'black', r, b, nonZero);
-    
-    if(nonZero > 0) {
-        let pd1 = Math.round((d1/nonZero)*100);
-        let pd2 = Math.round((d2/nonZero)*100);
-        document.getElementById('pct-d1').innerText = `${pd1}%`;
-        document.getElementById('pct-d2').innerText = `${pd2}%`;
-        document.getElementById('pct-d3').innerText = `${100-pd1-pd2}%`;
-        
-        document.getElementById('bar-d1').style.width = `${pd1}%`;
-        document.getElementById('bar-d2').style.width = `${pd2}%`;
-        document.getElementById('bar-d3').style.width = `${100-pd1-pd2}%`;
+    // ---- 6. PnL Chart ----
+    let bHist=calculatePnL(spinHistory);
+    let bal=bHist[bHist.length-1]||0;
+    // Update consecutive losses tracking for display
+    if(spinHistory.length>=2){
+        // Detect last bet result
+        const recentBet=getBestBetSimple(spinHistory.slice(0,-1),consecutiveLosses);
+        if(recentBet){
+            const lastActual=spinHistory[spinHistory.length-1];
+            if(satisfiesBet(lastActual,recentBet)){consecutiveLosses=0;}
+            else{consecutiveLosses++;}
+        }
     }
-
-    // 7. Calculate Virtual PnL & Render Chart
-    let bHist = calculatePnL(spinHistory);
-    let currentBal = bHist[bHist.length - 1] || 0;
-    
-    let balEl = document.getElementById('balance-display');
-    balEl.innerText = `${currentBal > 0 ? '+' : ''}${currentBal} Pts`;
-    balEl.style.color = currentBal >= 0 ? '#69f0ae' : '#ff5252';
-
+    let balEl=document.getElementById('balance-display');
+    balEl.innerText=`${bal>0?'+':''}${bal} Pts`;
+    balEl.style.color=bal>=0?'#69f0ae':'#ff5252';
     renderChart(bHist);
-    
-    // 8. Async ML Override (Optimistic UI)
+
     fetchMLUpdate();
 }
 
-async function fetchMLUpdate() {
-   try {
-       let res = await fetch(`http://${serverIP}:5000/predict`, {
-           method: 'POST',
-           headers: {'Content-Type': 'application/json'},
-           body: JSON.stringify({ spins: spinHistory })
-       });
-       if(res.ok) {
-           updateServerStatus('Online', 'online');
-           let data = await res.json();
-           if(data.status === 'success') {
-               let top3 = data.predictions;
-               for(let i=1; i<=3; i++) {
-                   let el = document.getElementById(`pred-${i}`);
-                   let num = top3[i-1];
-                   el.innerText = num;
-                   el.className = `val ${getTextColorClass(num)}`;
-                   
-                   let box = document.getElementById(`box-pred-${i}`);
-                   let betEl = document.getElementById(`bet-${i}`);
-                   let conf = data.confidence;
-                   
-                   // ML Confidence overrides
-                   let thresh = isAggressive ? 1.5 : 2.5; 
-                   if(conf > thresh) {
-                       betEl.innerHTML = `Bet ${BASE_UNIT} Pts`;
-                       betEl.className = 'bet-amt hot';
-                       box.classList.add('active-bet');
-                       
-                       // Premium Glow if confidence is very high
-                       if(conf > 70) {
-                           box.classList.add('highly-confident-bet');
-                           el.classList.add('text-cyan');
-                       } else {
-                           box.classList.remove('highly-confident-bet');
-                           el.classList.remove('text-cyan');
-                       }
-                   } else {
-                       betEl.innerHTML = 'Wait';
-                       betEl.className = 'bet-amt';
-                       box.classList.remove('active-bet');
-                       box.classList.remove('highly-confident-bet');
-                       el.classList.remove('text-cyan');
-                   }
-               }
-               document.getElementById('dealer-sig').innerHTML = `<span class='text-cyan' style='font-size:11px'>ML: ${data.model.substring(0,25)}</span>`;
-           }
-       } else {
-           updateServerStatus('Offline', 'offline');
-       }
-   } catch(e) {
-       console.error("ML Fetch Error: ", e);
-       updateServerStatus('Offline', 'offline');
-   }
+// ============================================================
+// ML BACKEND
+// ============================================================
+async function fetchMLUpdate(){
+    try{
+        let res=await fetch(`http://${serverIP}:5000/predict`,{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({spins:spinHistory})
+        });
+        if(res.ok){
+            updateServerStatus('Online','online');
+            let data=await res.json();
+            if(data.status==='success'){
+                let top3=data.predictions;
+                for(let i=1;i<=3;i++){
+                    let el=document.getElementById(`pred-${i}`);
+                    let num=top3[i-1];
+                    el.innerHTML=`${num} <span style="font-size:10px;color:#00e5ff">🤖ML</span>`;
+                    el.className=`val ${getTextColorClass(num)}`;
+                    let box=document.getElementById(`box-pred-${i}`);
+                    let betEl=document.getElementById(`bet-${i}`);
+                    if(data.confidence>2.5){betEl.innerHTML=`Bet ${BASE_UNIT} Pts`;betEl.className='bet-amt hot';box.classList.add('active-bet');}
+                    else{betEl.innerHTML='Wait';betEl.className='bet-amt';box.classList.remove('active-bet','highly-confident-bet');}
+                }
+                // Bug fix: do NOT overwrite dealer-sig — that's the Wheel Bias track numbers.
+                // Show ML engine name in server status bar instead.
+                updateServerStatus(`ML: ${data.model.substring(0,18)}`, 'online');
+            }
+        } else{updateServerStatus('Offline','offline');}
+    }catch(e){updateServerStatus('Offline','offline');}
 }
 
-// Boot
 init();
