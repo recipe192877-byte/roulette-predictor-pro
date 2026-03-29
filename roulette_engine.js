@@ -398,9 +398,12 @@ function satisfiesPrediction(n, pred) {
 }
 
 function calculatePnL(spins) {
-    // Bug fix: was 20, now 8 — chart starts populating earlier
-    if(spins.length < 8) return [0];
-    let balance=0, bHist=[0];
+    // Start chart from spin 1 for padding matching the x-axis properly
+    if(spins.length === 0) return [0];
+    let paddingLen = Math.min(8, spins.length);
+    let bHist = Array.from({length: paddingLen}, () => 0);
+    
+    let balance=0;
     let lossStreak=0;
     let betLoss=0;
 
@@ -663,8 +666,9 @@ function runAnalyticsAndBetting(){
         const top5 = hotScores.filter(s => s.num !== 0 || s.score > 1.5).slice(0, 5);
         const top5Nums = top5.map(s => {
             const col = RED_NUMBERS.includes(s.num) ? '#ff5252' : s.num === 0 ? '#69f0ae' : '#ccc';
-            return `<span style="color:${col};font-weight:bold">${s.num}</span>`;
-        }).join(' · ');
+            const hits = liveFreq[s.num] > 0 ? `<span style="font-size:8px;color:#888;margin-left:1px;">x${liveFreq[s.num]}</span>` : '';
+            return `<span style="color:${col};font-weight:bold">${s.num}${hits}</span>`;
+        }).join('<span style="color:#444;margin:0 2px;">·</span>');
 
         const label = len >= 10 ? 'Hot Numbers 🔥' : 'Base Bias';
         document.getElementById('dealer-sig').innerHTML =
