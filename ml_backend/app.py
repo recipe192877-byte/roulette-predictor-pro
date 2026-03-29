@@ -6,6 +6,7 @@ import math
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.neural_network import MLPClassifier
 from xgboost import XGBClassifier
 
 warnings.filterwarnings("ignore")
@@ -70,7 +71,11 @@ def get_features(spin_history):
         past = spin_history[:i]
         delay = get_delay(val, past)
             
-        features.append([val, is_red, is_even, dozen, col, dist_prev, sector, delay])
+        # Rolling stats
+        roll_seq = past[-3:] if len(past) >= 3 else past
+        roll_avg = sum(roll_seq) / len(roll_seq) if roll_seq else 18.0
+            
+        features.append([val, is_red, is_even, dozen, col, dist_prev, sector, delay, roll_avg])
     return np.array(features)
 
 def calculate_math_scores(spins):
@@ -158,7 +163,7 @@ def predict():
         
         # 2. Strict ML Online Learning Phase
         if len(spins) >= 15:
-            model_used = "Hybrid_AI (XGB+RF+Markov)"
+            model_used = "Hybrid_AI (XGB+RF+MLP+Markov)"
             try:
                 X = get_features(spins)
                 X_train = X[:-1]
@@ -180,19 +185,26 @@ def predict():
                     )
                     xgb.fit(X_train, y_train)
                     
+                    mlp = MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=300, random_state=42)
+                    mlp.fit(X_train, y_train)
+                    
                     # Target Feature row: predicting using LAST spin's state
                     X_test = X[-1].reshape(1, -1)
                     
                     rf_probs = rf.predict_proba(X_test)[0]
                     xgb_probs = xgb.predict_proba(X_test)[0]
+                    mlp_probs = mlp.predict_proba(X_test)[0]
                     
                     for idx, cls in enumerate(rf.classes_):
-                        final_probs[cls] += rf_probs[idx] * 0.3  # 30% RF Weight
+                        final_probs[cls] += rf_probs[idx] * 0.20  # 20% RF Weight
                         
                     for idx, cls in enumerate(xgb.classes_):
-                        final_probs[cls] += xgb_probs[idx] * 0.3  # 30% XGB Weight
+                        final_probs[cls] += xgb_probs[idx] * 0.20  # 20% XGB Weight
+
+                    for idx, cls in enumerate(mlp.classes_):
+                        final_probs[cls] += mlp_probs[idx] * 0.20  # 20% MLP Weight
                         
-                    confidence_multiplier = 1.8 
+                    confidence_multiplier = 2.5 
             except Exception as ml_e:
                 print("ML Warning:", ml_e)
                 # Fallback to Math if ML errors (e.g. single class issue)

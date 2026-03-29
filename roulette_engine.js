@@ -730,7 +730,8 @@ async function fetchMLUpdate(){
                     el.className=`val ${getTextColorClass(num)}`;
                     let box=document.getElementById(`box-pred-${i}`);
                     let betEl=document.getElementById(`bet-${i}`);
-                    if(data.confidence>2.5){betEl.innerHTML=`Bet ${BASE_UNIT} Pts`;betEl.className='bet-amt hot';box.classList.add('active-bet');}
+                    const betThreshML = isAggressive ? 45 : 65;
+                    if(data.confidence > betThreshML){betEl.innerHTML=`Bet ${BASE_UNIT} Pts`;betEl.className='bet-amt hot';box.classList.add('active-bet');}
                     else{betEl.innerHTML='Wait';betEl.className='bet-amt';box.classList.remove('active-bet','highly-confident-bet');}
                 }
                 // Bug fix: do NOT overwrite dealer-sig — that's the Wheel Bias track numbers.
