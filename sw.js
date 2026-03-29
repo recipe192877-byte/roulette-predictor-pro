@@ -1,9 +1,9 @@
-const CACHE_NAME = 'roulette-pro-v2';
+const CACHE_NAME = 'roulette-pro-v3';
 const ASSETS = [
     './',
     './index.html',
-    './style.css',
-    './roulette_engine.js',
+    './style.css?v=2',
+    './roulette_engine.js?v=2',
     './manifest.json',
     './icon-192.svg'
 ];
@@ -16,10 +16,26 @@ self.addEventListener('install', e => {
     );
 });
 
+self.addEventListener('activate', e => {
+    e.waitUntil(
+        caches.keys().then(keyList => {
+            return Promise.all(keyList.map(key => {
+                if (key !== CACHE_NAME) {
+                    return caches.delete(key);
+                }
+            }));
+        })
+    );
+});
+
 self.addEventListener('fetch', e => {
     e.respondWith(
-        caches.match(e.request).then(res => {
-            return res || fetch(e.request);
-        })
+        fetch(e.request)
+            .then(res => {
+                const resClone = res.clone();
+                caches.open(CACHE_NAME).then(cache => cache.put(e.request, resClone));
+                return res;
+            })
+            .catch(() => caches.match(e.request))
     );
 });
