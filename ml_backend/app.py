@@ -7,7 +7,11 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.neural_network import MLPClassifier
 from xgboost import XGBClassifier
+import lightgbm as lgb
+from sklearn.preprocessing import LabelEncoder
 
 warnings.filterwarnings("ignore")
 
@@ -74,8 +78,20 @@ def get_features(spin_history):
         # Rolling stats
         roll_seq = past[-3:] if len(past) >= 3 else past
         roll_avg = sum(roll_seq) / len(roll_seq) if roll_seq else 18.0
+        
+        # Calculate recent color streak pattern
+        streak = 0
+        if is_red == 1 or is_red == -1:
+            for s in reversed(past):
+                prev_is_red = 1 if s in RED_NUMBERS else (0 if s == 0 else -1)
+                if prev_is_red == is_red:
+                    streak += 1
+                else: break
+                
+        # Distance directly to the Zero Pocket
+        dist_to_zero = get_wheel_distance(val, 0)
             
-        features.append([val, is_red, is_even, dozen, col, dist_prev, sector, delay, roll_avg])
+        features.append([val, is_red, is_even, dozen, col, dist_prev, sector, delay, roll_avg, streak, dist_to_zero])
     return np.array(features)
 
 def calculate_math_scores(spins):
@@ -96,12 +112,12 @@ def calculate_math_scores(spins):
         for j in range(len(spins)-1):
             if spins[j] == last_num:
                 target = spins[j+1]
-                transition_weights[target] += 5.0  # Strong transition link
+                transition_weights[target] += 8.0  # Very Strong transition link
                 # Neighbor spillover
                 left_n = ROULETTE_NUMBERS[(ROULETTE_NUMBERS.index(target) - 1) % 37]
                 right_n = ROULETTE_NUMBERS[(ROULETTE_NUMBERS.index(target) + 1) % 37]
-                transition_weights[left_n] += 2.0
-                transition_weights[right_n] += 2.0
+                transition_weights[left_n] += 3.5
+                transition_weights[right_n] += 3.5
 
     # Sector momentum
     recent_sectors = [get_sector(s) for s in recent_15]
@@ -109,8 +125,8 @@ def calculate_math_scores(spins):
     hot_sector = sector_counts.most_common(1)[0][0] if sector_counts else 0
 
     for i in range(37):
-        # Base Momentum
-        momentum = float(counts_15.get(i, 0) * 4.0) + float(counts_older.get(i, 0) * 1.5)
+        # Base Momentum (Favor recent heavily)
+        momentum = float(counts_15.get(i, 0) * 5.5) + float(counts_older.get(i, 0) * 1.0)
         
         # Delay Mechanics (Law of Thirds optimization)
         delay = get_delay(i, spins)
@@ -127,9 +143,12 @@ def calculate_math_scores(spins):
             
         # Wheel Neighbor proximity to recent hits
         neighbor_score = 0.0
-        for r in recent_15[-3:]:
-            if get_wheel_distance(i, r) <= 2:
-                neighbor_score += 1.5
+        for r in recent_15[-5:]:
+            dist = get_wheel_distance(i, r)
+            if dist <= 2:
+                neighbor_score += 2.5
+            elif dist <= 4:
+                neighbor_score += 1.0
                 
         # Markov Chain Transition
         markov = transition_weights[i]
@@ -163,7 +182,7 @@ def predict():
         
         # 2. Strict ML Online Learning Phase
         if len(spins) >= 15:
-            model_used = "Hybrid_AI (XGB+RF+MLP+Markov)"
+            model_used = "Deep_Hybrid_AI (LGBM+XGB+RF+MLP)"
             try:
                 X = get_features(spins)
                 X_train = X[:-1]
@@ -173,20 +192,27 @@ def predict():
                     rf = RandomForestClassifier(n_estimators=150, random_state=42, max_depth=5, min_samples_leaf=1)
                     rf.fit(X_train, y_train)
                     
+                    # XGB and LGBM require 0-N indexing
+                    le = LabelEncoder()
+                    y_train_encoded = le.fit_transform(y_train)
+                    
                     xgb = XGBClassifier(
                         n_estimators=100, 
                         max_depth=3, 
                         learning_rate=0.08, 
                         min_child_weight=1, 
                         gamma=0.2, 
-                        use_label_encoder=False, 
                         eval_metric='mlogloss', 
+                        verbosity=0,
                         random_state=42
                     )
-                    xgb.fit(X_train, y_train)
+                    xgb.fit(X_train, y_train_encoded)
                     
                     mlp = MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=300, random_state=42)
                     mlp.fit(X_train, y_train)
+                    
+                    lgbm = lgb.LGBMClassifier(n_estimators=100, max_depth=3, learning_rate=0.08, random_state=42, verbose=-1, min_child_samples=2)
+                    lgbm.fit(X_train, y_train_encoded)
                     
                     # Target Feature row: predicting using LAST spin's state
                     X_test = X[-1].reshape(1, -1)
@@ -194,17 +220,23 @@ def predict():
                     rf_probs = rf.predict_proba(X_test)[0]
                     xgb_probs = xgb.predict_proba(X_test)[0]
                     mlp_probs = mlp.predict_proba(X_test)[0]
+                    lgbm_probs = lgbm.predict_proba(X_test)[0]
                     
                     for idx, cls in enumerate(rf.classes_):
-                        final_probs[cls] += rf_probs[idx] * 0.20  # 20% RF Weight
+                        final_probs[cls] += rf_probs[idx] * 0.15  # 15% RF Weight
                         
-                    for idx, cls in enumerate(xgb.classes_):
-                        final_probs[cls] += xgb_probs[idx] * 0.20  # 20% XGB Weight
+                    for idx, enc_cls in enumerate(xgb.classes_):
+                        real_cls = le.classes_[enc_cls]
+                        final_probs[real_cls] += xgb_probs[idx] * 0.15  # 15% XGB Weight
 
                     for idx, cls in enumerate(mlp.classes_):
-                        final_probs[cls] += mlp_probs[idx] * 0.20  # 20% MLP Weight
+                        final_probs[cls] += mlp_probs[idx] * 0.15  # 15% MLP Weight
                         
-                    confidence_multiplier = 2.5 
+                    for idx, enc_cls in enumerate(lgbm.classes_):
+                        real_cls = le.classes_[enc_cls]
+                        final_probs[real_cls] += lgbm_probs[idx] * 0.15  # 15% LGBM Weight
+                        
+                    confidence_multiplier = 2.8 
             except Exception as ml_e:
                 print("ML Warning:", ml_e)
                 # Fallback to Math if ML errors (e.g. single class issue)
@@ -219,11 +251,11 @@ def predict():
         top_score = min(sorted_preds[0][1] * 100 * confidence_multiplier, 99.9)
         
         # Determine strict confidence label
-        if top_score < 15.0:
+        if top_score < 14.0:
             status_label = "WAIT"
-        elif 15.0 <= top_score < 25.0:
+        elif 14.0 <= top_score < 24.0:
             status_label = "LOW"
-        elif 25.0 <= top_score < 40.0:
+        elif 24.0 <= top_score < 38.0:
             status_label = "GOOD"
         else:
             status_label = "HIGH"
