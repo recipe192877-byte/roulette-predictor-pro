@@ -529,32 +529,45 @@ function computeWheelSpeedData() {
         stdDev       = Math.sqrt(allIntervals.reduce((a, b) => a + (b - mean) ** 2, 0) / allIntervals.length);
         cv           = stdDev / mean || 0.2;
 
-        // --- Step 4: Speed trend ---
-        if(allIntervals.length >= 4) {
-            const half     = Math.floor(allIntervals.length / 2);
-            const earlyMean= allIntervals.slice(0, half).reduce((a,b) => a+b, 0) / half;
-            const lateMean = allIntervals.slice(-half).reduce((a,b) => a+b, 0) / half;
-            const change   = earlyMean > 0 ? (lateMean - earlyMean) / earlyMean : 0;
-            if(change > 0.18)       trend = 'SLOWING';
-            else if(change < -0.18) trend = 'SPEEDING';
+        // --- Step 4: High-Sensitivity Speed Trend (Slope Regression) ---
+        if(recent.length >= 4) {
+            const n = recent.length;
+            let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+            for(let i = 0; i < n; i++) {
+                sumX += i;
+                sumY += recent[i];
+                sumXY += i * recent[i];
+                sumX2 += i * i;
+            }
+            const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+            // Slope > 0.6 seconds/spin means interval is growing -> SLOWING
+            if(slope > 0.6)       trend = 'SLOWING';
+            else if(slope < -0.6) trend = 'SPEEDING';
         }
     }
 
-    // --- Step 5: Professional Continuous Offset Calculation ---
-    // Smooth transition: offset = 19 - (avgInterval / 3). Clamped between 3 and 18.
-    let offset = Math.round(19 - (avgInterval / 3.0));
-    offset = Math.max(3, Math.min(18, offset));
+    // --- Step 5: Pro Logarithmic Momentum Offset ---
+    // Logarithmic curve accurately maps physics friction: longer intervals decay faster.
+    let baseOffset = 18.0 - (Math.log10(avgInterval / 4.0) * 11.0);
+    // Add micro-adjustments for speeding/slowing physics
+    if(trend === 'SPEEDING') baseOffset += 1.5;
+    else if(trend === 'SLOWING') baseOffset -= 1.5;
+    
+    let offset = Math.round(Math.max(2, Math.min(18, baseOffset)));
 
     let speedCategory;
     if(avgInterval < 22)      speedCategory = 'FAST';
     else if(avgInterval < 38) speedCategory = 'MEDIUM';
     else                      speedCategory = 'SLOW';
 
-    // Base sector size (Fast wheels hit tighter clusters)
-    const baseSector = speedCategory === 'FAST' ? 6 : speedCategory === 'MEDIUM' ? 8 : 10;
-    
-    // Erratic wheels (high CV) widen the hit zone up to 15 pockets
-    const sectorSize = Math.min(15, baseSector + Math.round(cv * 8));
+    // --- Sniper Mode: Sector Size Optimization ---
+    let sectorSize;
+    if (cv < 0.15 && allIntervals.length >= 5) { // Robotic dealer "Sniper Mode"
+        sectorSize = speedCategory === 'FAST' ? 3 : 5; 
+    } else {
+        const baseSector = speedCategory === 'FAST' ? 6 : speedCategory === 'MEDIUM' ? 8 : 10;
+        sectorSize = Math.min(15, baseSector + Math.round(cv * 8));
+    }
 
     // --- Step 6: Gaussian Probability Cloud from Predicted Drop Point ---
     const lastNum = spinHistory[len - 1];
@@ -611,7 +624,7 @@ function computeWheelSpeedData() {
     const varPenalty = Math.round(Math.min(35, cv * 70));          
     const trendBonus = trend === 'STABLE' ? 5 : -4;               
     const dataBonus  = Math.min(15, Math.floor(allIntervals.length / 2.5)); 
-    const confidence = Math.max(15, Math.min(96, baseConf - varPenalty + trendBonus + dataBonus));
+    const confidence = Math.max(15, Math.min(99, baseConf - varPenalty + trendBonus + dataBonus + (cv < 0.15 ? 15 : 0))); // Sniper bonus
 
     // --- Format interval for display ---
     const mins2 = Math.floor(avgInterval / 60);
@@ -808,7 +821,7 @@ function runAnalyticsAndBetting(){
                 `<span style="color:#444"> ~${ws.intervalStr} · <span style="color:${confColor}">${ws.confidence}%</span></span><br>`+
                 `${nums}<br>`+
                 `<span style="color:${TCOL[ws.trend]};font-size:8px">${TREND[ws.trend]}</span>`+
-                `<span style="color:${cvColor};font-size:8px"> · ${cvLabel}</span></span>`;
+                `<span style="color:${cvColor};font-size:8px"> · ${cvLabel}${ws.cv < 0.15 ? ' 🎯 SNIPER' : ''}</span></span>`;
         } else {
             const liveFreq=new Array(37).fill(0);
             spinHistory.forEach(n=>liveFreq[n]++);
