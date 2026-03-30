@@ -96,12 +96,12 @@ def calculate_math_scores(spins):
         for j in range(len(spins)-1):
             if spins[j] == last_num:
                 target = spins[j+1]
-                transition_weights[target] += 5.0  # Strong transition link
+                transition_weights[target] += 8.0  # Very Strong transition link
                 # Neighbor spillover
                 left_n = ROULETTE_NUMBERS[(ROULETTE_NUMBERS.index(target) - 1) % 37]
                 right_n = ROULETTE_NUMBERS[(ROULETTE_NUMBERS.index(target) + 1) % 37]
-                transition_weights[left_n] += 2.0
-                transition_weights[right_n] += 2.0
+                transition_weights[left_n] += 3.5
+                transition_weights[right_n] += 3.5
 
     # Sector momentum
     recent_sectors = [get_sector(s) for s in recent_15]
@@ -109,8 +109,8 @@ def calculate_math_scores(spins):
     hot_sector = sector_counts.most_common(1)[0][0] if sector_counts else 0
 
     for i in range(37):
-        # Base Momentum
-        momentum = float(counts_15.get(i, 0) * 4.0) + float(counts_older.get(i, 0) * 1.5)
+        # Base Momentum (Favor recent heavily)
+        momentum = float(counts_15.get(i, 0) * 5.5) + float(counts_older.get(i, 0) * 1.0)
         
         # Delay Mechanics (Law of Thirds optimization)
         delay = get_delay(i, spins)
@@ -127,9 +127,12 @@ def calculate_math_scores(spins):
             
         # Wheel Neighbor proximity to recent hits
         neighbor_score = 0.0
-        for r in recent_15[-3:]:
-            if get_wheel_distance(i, r) <= 2:
-                neighbor_score += 1.5
+        for r in recent_15[-5:]:
+            dist = get_wheel_distance(i, r)
+            if dist <= 2:
+                neighbor_score += 2.5
+            elif dist <= 4:
+                neighbor_score += 1.0
                 
         # Markov Chain Transition
         markov = transition_weights[i]
@@ -179,8 +182,8 @@ def predict():
                         learning_rate=0.08, 
                         min_child_weight=1, 
                         gamma=0.2, 
-                        use_label_encoder=False, 
                         eval_metric='mlogloss', 
+                        verbosity=0,
                         random_state=42
                     )
                     xgb.fit(X_train, y_train)

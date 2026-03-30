@@ -60,8 +60,9 @@ const BASE_UNIT = 10;
 const MAX_BET = 200;
 const FIB = [1,1,2,3,5,8,13,21,34,55,89];
 let isVoiceEnabled = false;
-let pnlChartInstance = null;
 let consecutiveLosses = 0; // Track losses for circuit breaker
+let betLossCount = 0; // Tracks progressive bet loss count
+let spinTimestamps = []; // Unix ms timestamp of each spin entry (for speed analysis)
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition;
@@ -80,7 +81,7 @@ function init() {
     lbl.classList.toggle('active', isAggressive);
     document.getElementById('btn-undo').addEventListener('click', undoSpin);
     document.getElementById('btn-clear').addEventListener('click', () => {
-        if(confirm("Clear all history?")) { spinHistory=[]; consecutiveLosses=0; updateApp(); }
+        if(confirm("Clear all history?")) { spinHistory=[]; spinTimestamps=[]; consecutiveLosses=0; betLossCount=0; saveState(); updateApp(); }
     });
     document.getElementById('btn-refresh').addEventListener('click', () => location.reload());
     document.getElementById('server-status').addEventListener('click', () => {
@@ -148,32 +149,32 @@ function computeTopNumbers(liveHistory) {
 
     const scores=[];
     for(let n=0;n<=36;n++){
-        // L1: Historical baseline
+        // L1: Historical baseline (reduced to prevent watering down live data)
         const histScore=(BASE_FREQ[n]/BASE_TOTAL)*37;
-        const L1=histScore*2.5;
+        const L1=histScore*0.5;
 
-        // L2: Live recency EMA
+        // L2: Live recency EMA (increased for hot numbers)
         let liveRecency=0;
         for(let j=0;j<N;j++){
             if(liveHistory[j]===n){
                 const age=N-1-j;
-                let w=age<10?1.5:age<25?1.0:0.4;
+                let w=age<8?2.5:age<20?1.2:0.3;
                 liveRecency+=w;
             }
         }
-        const L2=liveRecency*1.8;
+        const L2=liveRecency*2.0;
 
-        // L3: Markov Chain
+        // L3: Markov Chain (Aggressively increased, roulette is heavily pattern-based)
         let markov=0;
         if(lastNum>=0){
             const row1=combinedTransRow(lastNum);
             const r1Total=row1.reduce((a,b)=>a+b,0)||1;
-            markov+=(row1[n]/r1Total)*37*3.0;
+            markov+=(row1[n]/r1Total)*37*4.5;
         }
         if(last2Num>=0&&lastNum>=0){
             const diag=liveTransitions[last2Num][lastNum]>0
                 ?(liveTransitions[lastNum][n]/(liveTransitions[last2Num][lastNum]+0.5)):0;
-            markov+=diag*1.5;
+            markov+=diag*2.5;
         }
         const L3=markov;
 
@@ -184,7 +185,7 @@ function computeTopNumbers(liveHistory) {
         else if(gap<8)  gapScore=(8-gap)*0.25;
         const L4=gapScore*1.2;
 
-        // L5: Wheel sector
+        // L5: Wheel sector (Increased & Wider Net because of dealer signature)
         let sector=0;
         const wheelIdx=ROULETTE_NUMBERS.indexOf(n);
         const recent15=liveHistory.slice(-15);
@@ -193,9 +194,10 @@ function computeTopNumbers(liveHistory) {
             if(rnIdx<0)continue;
             let dist=Math.abs(rnIdx-wheelIdx);
             if(dist>18)dist=37-dist;
-            if(dist<=3&&dist>0) sector+=(4-dist)*0.35;
+            if(dist<=2) sector+=1.5;
+            else if(dist<=4) sector+=0.6;
         }
-        const L5=sector*1.5;
+        const L5=sector*2.5;
 
         scores.push({num:n,score:L1+L2+L3+L4+L5});
     }
@@ -231,7 +233,7 @@ function getBestBet(historySlice) {
     let c1=0,c2=0,c3=0;
     w.forEach(n=>{if(n===0)return;if(n%3===1)c1++;else if(n%3===2)c2++;else c3++;});
     const expC=W*(12/37), sdC=Math.sqrt(W*(12/37)*(25/37));
-    const THRESH = isAggressive ? 1.5 : 2.0; // Require 2 SD deviation
+    const THRESH = isAggressive ? 1.8 : 2.4; // Increased threshold to avoid fake signals
     if(c1>expC+THRESH*sdC) candidates.push({type:'col',label:'Col 1',pred:"<span class='text-blue'>Play Col 1</span>",zScore:(c1-expC)/sdC,payout:3});
     if(c2>expC+THRESH*sdC) candidates.push({type:'col',label:'Col 2',pred:"<span class='text-gold'>Play Col 2</span>",zScore:(c2-expC)/sdC,payout:3});
     if(c3>expC+THRESH*sdC) candidates.push({type:'col',label:'Col 3',pred:"<span class='text-green'>Play Col 3</span>",zScore:(c3-expC)/sdC,payout:3});
@@ -252,7 +254,7 @@ function getBestBet(historySlice) {
         n<=18?l++:h++;
     });
     const expH=W*(18/37), sdH=Math.sqrt(W*(18/37)*(19/37));
-    const THRESH_H = isAggressive ? 1.3 : 1.8;
+    const THRESH_H = isAggressive ? 1.6 : 2.2;
     const outCands=[
         {label:'RED',  pred:"<span class='text-red'>Play RED</span>",  hits:r,payout:2},
         {label:'BLK',  pred:"Play BLACK",                               hits:b,payout:2},
@@ -307,6 +309,10 @@ function loadState() {
         if(h){spinHistory=JSON.parse(h);if(spinHistory.length>MAX_HISTORY)spinHistory=spinHistory.slice(-MAX_HISTORY);}
         let r=localStorage.getItem('rppro_risk'); if(r!==null)isAggressive=(r==='true');
         let p=localStorage.getItem('rppro_prog_mode'); if(p!==null)progMode=p;
+        let cl=localStorage.getItem('rppro_cons_losses'); if(cl!==null)consecutiveLosses=parseInt(cl)||0;
+        let bl=localStorage.getItem('rppro_bet_loss'); if(bl!==null)betLossCount=parseInt(bl)||0;
+        let ts=localStorage.getItem('rppro_timestamps');
+        if(ts){try{spinTimestamps=JSON.parse(ts).slice(-500);}catch(e){spinTimestamps=[];}}
     } catch(e){}
 }
 function saveState(){
@@ -314,6 +320,9 @@ function saveState(){
         localStorage.setItem('rppro_history',JSON.stringify(spinHistory));
         localStorage.setItem('rppro_risk',isAggressive);
         localStorage.setItem('rppro_prog_mode',progMode);
+        localStorage.setItem('rppro_cons_losses',consecutiveLosses);
+        localStorage.setItem('rppro_bet_loss',betLossCount);
+        localStorage.setItem('rppro_timestamps',JSON.stringify(spinTimestamps.slice(-500)));
     }catch(e){}
 }
 
@@ -355,8 +364,16 @@ function generateKeypad(){
     document.querySelectorAll('.key').forEach(btn=>btn.addEventListener('click',e=>addSpin(parseInt(e.target.getAttribute('data-num')))));
 }
 
-function addSpin(n){if(spinHistory.length>=MAX_HISTORY)spinHistory.shift();spinHistory.push(n);updateApp();}
-function undoSpin(){if(spinHistory.length>0)spinHistory.pop();updateApp();}
+function addSpin(n){
+    if(spinHistory.length>=MAX_HISTORY){spinHistory.shift();if(spinTimestamps.length>0)spinTimestamps.shift();}
+    spinHistory.push(n);
+    spinTimestamps.push(Date.now());
+    updateApp();
+}
+function undoSpin(){
+    if(spinHistory.length>0){spinHistory.pop();if(spinTimestamps.length>0)spinTimestamps.pop();}
+    updateApp();
+}
 
 // ============================================================
 // VIRTUAL PnL — Now uses Smart Single Bet
@@ -472,28 +489,143 @@ function getBestBetSimple(historySlice, lossStreak) {
 }
 
 // ============================================================
-// CHART
+// ADVANCED WHEEL SPEED ANALYSIS ENGINE
 // ============================================================
-function renderChart(dataArr){
-    let ctx=document.getElementById('pnlChart');
-    if(!ctx)return;
-    let labels=dataArr.map((_,i)=>i);
-    let color=dataArr[dataArr.length-1]>=0?'#69f0ae':'#ff5252';
-    if(pnlChartInstance){
-        pnlChartInstance.data.labels=labels;
-        pnlChartInstance.data.datasets[0].data=dataArr;
-        pnlChartInstance.data.datasets[0].borderColor=color;
-        pnlChartInstance.data.datasets[0].backgroundColor=color==='#69f0ae'?'rgba(105,240,174,0.08)':'rgba(255,82,82,0.08)';
-        pnlChartInstance.update();
-    } else {
-        Chart.defaults.color='#888';Chart.defaults.font.family='Montserrat';
-        pnlChartInstance=new Chart(ctx,{
-            type:'line',
-            data:{labels,datasets:[{label:'Virtual PnL',data:dataArr,borderColor:color,borderWidth:2,pointRadius:0,tension:0.3,fill:true,backgroundColor:'rgba(105,240,174,0.08)'}]},
-            options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{display:false},y:{display:true,grid:{color:'rgba(255,255,255,0.05)'}}}}
-        });
+// Algorithm combines:
+//  1. Recency-weighted interval average (recent spins count more)
+//  2. Coefficient of variation (CV) for consistency scoring
+//  3. Speed trend detection (SPEEDING / STABLE / SLOWING)
+//  4. Gaussian probability spread from last wheel position
+//  5. Multi-factor blend: speed sector + recency freq + Markov
+//  6. Dynamic confidence score adjusted by variance and data size
+// ============================================================
+function computeWheelSpeedData() {
+    const len = spinHistory.length;
+    if(spinTimestamps.length < 3 || len < 2)
+        return { valid:false, remaining: Math.max(0, 3 - spinTimestamps.length) };
+
+    // --- Step 1: Build valid intervals (filter rapid manual entry < 8s) ---
+    const allIntervals = [];
+    for(let i = 1; i < spinTimestamps.length; i++) {
+        const s = (spinTimestamps[i] - spinTimestamps[i-1]) / 1000;
+        if(s >= 8 && s < 300) allIntervals.push(s);
     }
+    
+    // Default values if user is entering data manually and no real timing exists
+    let avgInterval = 40; 
+    let cv = 0.2; 
+    let trend = 'STABLE';
+    let stdDev = 0;
+
+    if(allIntervals.length >= 2) {
+        // --- Step 2: Recency-weighted average ---
+        const recent     = allIntervals.slice(-7);
+        const wts        = recent.map((_, i) => i + 1);
+        const wSum       = wts.reduce((a, b) => a + b, 0);
+        avgInterval      = recent.reduce((s, v, i) => s + v * wts[i], 0) / wSum;
+
+        // --- Step 3: Consistency metric (Coefficient of Variation) ---
+        const mean   = allIntervals.reduce((a, b) => a + b, 0) / allIntervals.length;
+        stdDev       = Math.sqrt(allIntervals.reduce((a, b) => a + (b - mean) ** 2, 0) / allIntervals.length);
+        cv           = stdDev / mean || 0.2;
+
+        // --- Step 4: Speed trend ---
+        if(allIntervals.length >= 4) {
+            const half     = Math.floor(allIntervals.length / 2);
+            const earlyMean= allIntervals.slice(0, half).reduce((a,b) => a+b, 0) / half;
+            const lateMean = allIntervals.slice(-half).reduce((a,b) => a+b, 0) / half;
+            const change   = earlyMean > 0 ? (lateMean - earlyMean) / earlyMean : 0;
+            if(change > 0.18)       trend = 'SLOWING';
+            else if(change < -0.18) trend = 'SPEEDING';
+        }
+    }
+
+    // --- Step 5: Professional Continuous Offset Calculation ---
+    // Smooth transition: offset = 19 - (avgInterval / 3). Clamped between 3 and 18.
+    let offset = Math.round(19 - (avgInterval / 3.0));
+    offset = Math.max(3, Math.min(18, offset));
+
+    let speedCategory;
+    if(avgInterval < 22)      speedCategory = 'FAST';
+    else if(avgInterval < 38) speedCategory = 'MEDIUM';
+    else                      speedCategory = 'SLOW';
+
+    // Base sector size (Fast wheels hit tighter clusters)
+    const baseSector = speedCategory === 'FAST' ? 6 : speedCategory === 'MEDIUM' ? 8 : 10;
+    
+    // Erratic wheels (high CV) widen the hit zone up to 15 pockets
+    const sectorSize = Math.min(15, baseSector + Math.round(cv * 8));
+
+    // --- Step 6: Gaussian Probability Cloud from Predicted Drop Point ---
+    const lastNum = spinHistory[len - 1];
+    const lastIdx = ROULETTE_NUMBERS.indexOf(lastNum);
+    const sigma   = sectorSize / 2.0; 
+    const speedProb = new Array(37).fill(0);
+    
+    // Dealer/Rotor physics: Ball and wheel rotate in opposite directions, alternating each spin
+    const dir = (len % 2 === 0) ? 1 : -1;
+    let predictedIdx = (lastIdx + (offset * dir)) % 37;
+    if(predictedIdx < 0) predictedIdx += 37;
+
+    for(let n = 0; n <= 36; n++) {
+        const nIdx = ROULETTE_NUMBERS.indexOf(n);
+        let dist   = Math.abs(nIdx - predictedIdx);
+        if(dist > 18) dist = 37 - dist; // Circular distance wrapping
+        speedProb[n] = Math.exp(-(dist * dist) / (2 * sigma * sigma));
+    }
+
+    // --- Step 7: Recency-weighted Frequency Scoring ---
+    const recencyFreq = new Array(37).fill(0);
+    const w30 = spinHistory.slice(-30);
+    w30.forEach((n, idx) => {
+        const age = w30.length - 1 - idx;
+        recencyFreq[n] += age < 5 ? 4 : age < 15 ? 2 : 1;
+    });
+    const freqMax = Math.max(...recencyFreq) || 1;
+
+    // --- Step 8: Markov Chain Validation (Historical Flow) ---
+    const markovScores = new Array(37).fill(0);
+    for(let i = 0; i < len - 1; i++) {
+        if(spinHistory[i] === lastNum) markovScores[spinHistory[i+1]]++;
+    }
+    const markovMax = Math.max(...markovScores) || 1;
+
+    // --- Step 9: Pro Blending Matrix ---
+    // FAST wheels are physically deterministic (ballistics work best). SLOW wheels rely more on patterns/frequency.
+    const wSpeed  = speedCategory === 'FAST' ? 0.65 : speedCategory === 'MEDIUM' ? 0.50 : 0.35;
+    const wFreq   = speedCategory === 'FAST' ? 0.20 : 0.35;
+    const wMarkov = speedCategory === 'FAST' ? 0.15 : 0.30;
+
+    const finalScores = [];
+    for(let n = 0; n <= 36; n++) {
+        const combined = (speedProb[n]               * wSpeed)
+                       + ((recencyFreq[n] / freqMax) * wFreq)
+                       + ((markovScores[n] / markovMax) * wMarkov);
+        finalScores.push({ num:n, score:combined });
+    }
+    finalScores.sort((a, b) => b.score - a.score);
+
+    // --- Step 10: Accurate Confidence Scoring ---
+    // FAST wheels naturally have much higher confidence. Erratic dealers (CV) destroy confidence.
+    const baseConf   = { FAST:85, MEDIUM:65, SLOW:40 }[speedCategory];
+    const varPenalty = Math.round(Math.min(35, cv * 70));          
+    const trendBonus = trend === 'STABLE' ? 5 : -4;               
+    const dataBonus  = Math.min(15, Math.floor(allIntervals.length / 2.5)); 
+    const confidence = Math.max(15, Math.min(96, baseConf - varPenalty + trendBonus + dataBonus));
+
+    // --- Format interval for display ---
+    const mins2 = Math.floor(avgInterval / 60);
+    const secs2 = Math.round(avgInterval % 60);
+    const intervalStr = mins2 > 0 ? `${mins2}m${secs2}s` : `${Math.round(avgInterval)}s`;
+
+    return {
+        valid: true,
+        speedCategory, avgInterval, intervalStr, trend,
+        confidence, sectorSize, lastNum, cv, stdDev,
+        topNumbers: finalScores.slice(0, 8)
+    };
 }
+
 
 // ============================================================
 // MAIN UPDATE
@@ -524,17 +656,27 @@ function updateBar(id1,id2,v1,v2,tot){
 }
 
 function resetUI(){
+    // Main bet card
+    const bc=document.getElementById('main-bet-card');
+    const bl=document.getElementById('main-bet-label');
+    const ba=document.getElementById('main-bet-amount');
+    const bf=document.getElementById('main-bet-footer');
+    if(bc) bc.className='main-bet-card glass no-signal';
+    if(bl){ bl.innerHTML='WAIT'; bl.className='mbc-play wait-state'; }
+    if(ba){ ba.innerHTML='—'; ba.className='mbc-amount'; }
+    let pg=document.getElementById('main-bet-prog'); if(pg) pg.innerText='';
+    let bg=document.getElementById('main-bet-badge'); if(bg){ bg.innerText='—'; bg.style.color=''; }
+    if(bf) bf.innerHTML='<span style="color:#555;font-size:9px">Input 5+ spins to begin analysis</span>';
+    // Bottom mini boxes
     [1,2,3].forEach(i=>{
-        document.getElementById(`pred-${i}`).innerHTML='--';
-        document.getElementById(`pred-${i}`).className='val';
-        document.getElementById(`bet-${i}`).innerHTML='Wait';
-        document.getElementById(`bet-${i}`).className='bet-amt';
-        document.getElementById(`box-pred-${i}`).classList.remove('active-bet','highly-confident-bet');
+        let el=document.getElementById(`pred-${i}`); if(el){el.innerHTML='--';el.className='mini-val';}
+        let be=document.getElementById(`bet-${i}`); if(be){be.innerHTML='—';be.className='mini-bet';}
+        let bx=document.getElementById(`box-pred-${i}`); if(bx)bx.classList.remove('active-bet','highly-confident-bet');
     });
     ['column','dozen','outside','voisins','tiers','orphelins'].forEach(id=>{
-        let pEl=document.getElementById(`pred-${id}`); if(pEl)pEl.innerHTML='Need 20+';
-        let bEl=document.getElementById(`bet-${id}`); if(bEl){bEl.innerHTML='--';bEl.className='bet-amt mt-5';}
-        let bxEl=document.getElementById(`box-${id}`); if(bxEl)bxEl.classList.remove('active-bet');
+        let p=document.getElementById(`pred-${id}`); if(p)p.innerHTML='—';
+        let b=document.getElementById(`bet-${id}`); if(b){b.innerHTML='—';b.className='mini-bet';}
+        let x=document.getElementById(`box-${id}`); if(x)x.classList.remove('active-bet');
     });
     document.getElementById('streak-alert').innerHTML='None';
     document.getElementById('dealer-sig').innerHTML='Analyzing...';
@@ -543,90 +685,90 @@ function resetUI(){
         let e=document.getElementById(`pct-${id}`);if(e)e.innerText='0%';
         let b=document.getElementById(`bar-${id}`);if(b)b.style.width='33.3%';
     });
-    renderChart([0]);
-    let bal=document.getElementById('balance-display');
-    bal.innerText='0 Pts';bal.style.color='#888';
+    let mp=document.getElementById('mini-pnl');
+    if(mp){mp.innerText='P&L: 0 Pts';mp.className='mini-pnl';}
 }
 
 function runAnalyticsAndBetting(){
     const len=spinHistory.length;
     if(len<5){resetUI();return;}
 
-    // ---- 1. Top 3 Numbers (5-Layer Engine) ----
-    const topNums=computeTopNumbers(spinHistory);
-    for(let i=1;i<=3;i++){
-        const pick=topNums[i-1];
-        const el=document.getElementById(`pred-${i}`);
-        const box=document.getElementById(`box-pred-${i}`);
-        const betEl=document.getElementById(`bet-${i}`);
-        let conf=pick.confidence;
-        let confLabel=conf>=65?` <span style="font-size:10px;color:#ff6b35;">🔥${conf}%</span>`
-                     :conf>=45?` <span style="font-size:10px;color:#ffd700;">⚡${conf}%</span>`
-                     :` <span style="font-size:10px;color:#888;">❄️${conf}%</span>`;
-        el.innerHTML=`${pick.num}${confLabel}`;
-        el.className=`val ${getTextColorClass(pick.num)}`;
-        const betThresh=isAggressive?45:65;
-        if(conf>=betThresh){
-            betEl.innerHTML=`Bet ${BASE_UNIT} Pts`;
-            betEl.className='bet-amt hot';
-            box.classList.add('active-bet');
-            if(conf>=75)box.classList.add('highly-confident-bet');
-            else box.classList.remove('highly-confident-bet');
-        } else {
-            betEl.innerHTML='Wait';betEl.className='bet-amt';
-            box.classList.remove('active-bet','highly-confident-bet');
-        }
+    // ---- 1. MAIN BET CARD ----
+    const bestBet = getBestBet(spinHistory);
+    const bc  = document.getElementById('main-bet-card');
+    const bl  = document.getElementById('main-bet-label');
+    const ba  = document.getElementById('main-bet-amount');
+    const bf  = document.getElementById('main-bet-footer');
+    const bg  = document.getElementById('main-bet-badge');
+    const pg  = document.getElementById('main-bet-prog');
+
+    if(consecutiveLosses >= 5){
+        bc.className='main-bet-card glass circuit-break';
+        bl.innerHTML='⛔ PAUSE BETTING';
+        bl.className='mbc-play circuit-state';
+        ba.innerHTML='Break';
+        ba.className='mbc-amount';
+        if(pg) pg.innerText=`${consecutiveLosses} consecutive losses`;
+        if(bg){ bg.innerText='⚠️ Circuit'; bg.style.color='#ff5252'; }
+        if(bf) bf.innerHTML='<span class="mbc-strength" style="color:#ff5252">Step back — observe next 3 spins before betting</span>';
+    } else if(bestBet){
+        bc.className='main-bet-card glass has-signal';
+        bl.innerHTML = bestBet.pred;
+        bl.className='mbc-play';
+        const betAmt = getBetAmount(betLossCount);
+        ba.innerHTML = `${betAmt} Pts`;
+        ba.className = 'mbc-amount hot';
+        // Progression info
+        const progInfo = progMode==='FLAT'?'Flat bet'
+            :progMode==='FIBO'?`Fibonacci step ${betLossCount}`
+            :progMode==='DALE'?`D'Alembert +${betLossCount}`
+            :`Martingale ×${Math.pow(2,Math.min(betLossCount,4)).toFixed(0)}`;
+        if(pg) pg.innerText = progInfo;
+        if(bg){ bg.innerText=`${len} spins`; bg.style.color=''; }
+        // Quality label
+        const z = bestBet.zScore;
+        const ql = z>=3.5?'🔥 Very Strong':z>=2.5?'⚡ Strong':'✓ Good';
+        const qc = z>=3.5?'#ff6b35':z>=2.5?'#ffd700':'#69f0ae';
+        const typeLabel = bestBet.type==='streak'?'Streak Signal'
+            :bestBet.type==='col'?'2-to-1 Column'
+            :bestBet.type==='doz'?'2-to-1 Dozen':'Even Chance';
+        if(bf) bf.innerHTML=
+            `<span class="mbc-strength">${typeLabel} · Payout ${bestBet.payout}:1</span>`+
+            `<span class="mbc-quality" style="color:${qc}">${ql} (${z.toFixed(1)}σ)</span>`;
+        speakText(`${bestBet.pred.replace(/<[^>]*>?/gm,'')} — ${betAmt} points`);
+    } else {
+        bc.className='main-bet-card glass no-signal';
+        const msg = len<20?`WAIT — ${20-len} more spins needed`
+            :'NO SIGNAL — Observe';
+        bl.innerHTML=msg;
+        bl.className='mbc-play wait-state';
+        ba.innerHTML='—';
+        ba.className='mbc-amount';
+        if(pg) pg.innerText='';
+        if(bg){ bg.innerText=`${len} spins`; bg.style.color=''; }
+        if(bf) bf.innerHTML='<span class="mbc-strength">No statistically significant pattern detected yet</span>';
     }
 
-    // ---- 2. SMART SINGLE BEST BET for outside categories ----
-    // First clear all area boxes
+    // ---- 2. Secondary bet info (area boxes) ----
     ['column','dozen','outside','voisins','tiers','orphelins'].forEach(id=>{
-        let pEl=document.getElementById(`pred-${id}`);
-        let betEl=document.getElementById(`bet-${id}`);
-        let box=document.getElementById(`box-${id}`);
-        if(pEl)pEl.innerHTML=len<20?'Need 20+':'—';
-        if(betEl){betEl.innerHTML='Skip';betEl.className='bet-amt mt-5';}
-        if(box)box.classList.remove('active-bet');
+        let p=document.getElementById(`pred-${id}`);
+        let b=document.getElementById(`bet-${id}`);
+        let x=document.getElementById(`box-${id}`);
+        if(p)p.innerHTML='—';
+        if(b){b.innerHTML='—';b.className='mini-bet';}
+        if(x)x.classList.remove('active-bet');
     });
-
-    const bestBet=getBestBet(spinHistory);
-    let circuitLabel=consecutiveLosses>=5?`<span style='color:#ff5252;font-size:10px'>⚠️ Circuit Break (${consecutiveLosses} losses)</span>`:'';
-
-    if(bestBet){
-        // Show best bet in the appropriate box
-        let targetId;
-        if(bestBet.type==='col')    targetId='column';
-        else if(bestBet.type==='doz') targetId='dozen';
-        else                          targetId='outside'; // out or streak
-
-        let pEl=document.getElementById(`pred-${targetId}`);
-        let betEl=document.getElementById(`bet-${targetId}`);
-        let box=document.getElementById(`box-${targetId}`);
-
-        if(pEl) pEl.innerHTML=bestBet.pred;
-        if(betEl){
-            const betAmt=getBetAmount(0); // flat
-            betEl.innerHTML=`Bet ${betAmt} Pts ${circuitLabel}`;
-            betEl.className='bet-amt hot mt-5';
-        }
-        if(box) box.classList.add('active-bet');
-
-        // Show z-score in tiers box as info
-        let tiersEl=document.getElementById('pred-tiers');
-        if(tiersEl) tiersEl.innerHTML=`<span style='font-size:10px;color:#aaa'>Strength: ${bestBet.zScore.toFixed(2)}σ</span>`;
-
-        // Show "no other bets" in others to clarify
-        let vEl=document.getElementById('pred-voisins');
-        if(vEl) vEl.innerHTML=`<span style='font-size:10px;color:#555'>Focused mode</span>`;
-
-        speakText(`${bestBet.pred.replace(/<[^>]*>?/gm,'')} — ${getBetAmount(0)} points`);
-    } else {
-        // No signal → show circuit breaker or waiting message
-        let msg=len<20?'Need 20+ spins':consecutiveLosses>=5?'Circuit Break — Pause':'No Signal — Wait';
-        let colEl=document.getElementById('pred-column');
-        if(colEl) colEl.innerHTML=`<span style='font-size:11px;color:#aaa'>${msg}</span>`;
-        let vEl=document.getElementById('pred-voisins');
-        if(vEl) vEl.innerHTML=circuitLabel||'<span style="font-size:10px;color:#555">—</span>';
+    if(bestBet && consecutiveLosses<5){
+        const tid=bestBet.type==='col'?'column':bestBet.type==='doz'?'dozen':'outside';
+        let p=document.getElementById(`pred-${tid}`);
+        let b=document.getElementById(`bet-${tid}`);
+        let x=document.getElementById(`box-${tid}`);
+        const plainBet=bestBet.pred.replace(/<[^>]*>?/gm,'');
+        if(p)p.innerHTML=`<span style="font-size:9px;font-weight:700">${plainBet}</span>`;
+        if(b){b.innerHTML='Active';b.className='mini-bet hot';}
+        if(x)x.classList.add('active-bet');
+        let ti=document.getElementById('pred-tiers');
+        if(ti)ti.innerHTML=`${bestBet.zScore.toFixed(1)}σ`;
     }
 
     // ---- 3. Streaks ----
@@ -635,7 +777,7 @@ function runAnalyticsAndBetting(){
         let last7=spinHistory.slice(-7);
         let bC=0,rC=0,eC=0,oC=0;
         last7.forEach(n=>{if(n!==0){RED_NUMBERS.includes(n)?rC++:bC++;n%2===0?eC++:oC++;}});
-        if(rC>=6) stText="<span class='text-red'>Red Streak 🔥</span>";
+        if(rC>=6)      stText="<span class='text-red'>Red Streak 🔥</span>";
         else if(bC>=6) stText="Black Streak 🔥";
         else if(eC>=6) stText="<span class='text-gold'>Even Streak</span>";
         else if(oC>=6) stText="<span class='text-gold'>Odd Streak</span>";
@@ -644,44 +786,56 @@ function runAnalyticsAndBetting(){
     }
     document.getElementById('streak-alert').innerHTML=stText;
 
-    // ---- 4. Wheel Bias — Always shows TOP 5 HOT NUMBERS ----
-    // Combines historical baseline + live session frequency
-    // This ALWAYS shows something useful, never 'Unclear' or blank.
+    // ---- 4. Wheel Speed Analysis ----
     {
-        const liveFreq = new Array(37).fill(0);
-        spinHistory.forEach(n => liveFreq[n]++);
-        const liveW = len > 0 ? len : 1;
-
-        // Combined score: 50% historical baseline + 50% live frequency (normalized)
-        const hotScores = [];
-        for(let n = 0; n <= 36; n++){
-            const histNorm = (BASE_FREQ[n] / BASE_TOTAL) * 37;       // avg = 1.0
-            const liveNorm = (liveFreq[n] / liveW) * 37;             // avg = 1.0
-            const combined = (histNorm * 0.5) + (liveNorm * (len >= 10 ? 0.5 : 0.2));
-            hotScores.push({ num: n, score: combined });
+        const ws=computeWheelSpeedData();
+        if(ws.valid){
+            const ICONS ={FAST:'⚡',MEDIUM:'🌀',SLOW:'🐢'};
+            const COLS  ={FAST:'#ff9800',MEDIUM:'#ffd700',SLOW:'#69f0ae'};
+            const TREND ={SPEEDING:'↗ Speeding',STABLE:'→ Stable',SLOWING:'↘ Slowing'};
+            const TCOL  ={SPEEDING:'#ff9800',STABLE:'#666',SLOWING:'#69f0ae'};
+            const confColor=ws.confidence>=65?'#69f0ae':ws.confidence>=45?'#ffd700':'#ff9800';
+            const cvColor  =ws.cv<0.25?'#69f0ae':ws.cv<0.45?'#ffd700':'#ff5252';
+            const cvLabel  =ws.cv<0.25?'Consistent':ws.cv<0.45?'Variable':'Erratic';
+            const top5 = ws.topNumbers.slice(0,5).sort((a,b) => a.num - b.num);
+            const nums = top5.map(it => {
+                const col=RED_NUMBERS.includes(it.num)?'#ff5252':it.num===0?'#69f0ae':'#ccc';
+                return `<span style="color:${col};font-weight:bold">${it.num}</span>`;
+            }).join('<span style="color:#2a2a2a;margin:0 2px">·</span>');
+            document.getElementById('dealer-sig').innerHTML=
+                `<span style="font-size:9px;line-height:1.8">`+
+                `<span style="color:${COLS[ws.speedCategory]};font-weight:700">${ICONS[ws.speedCategory]} ${ws.speedCategory}</span>`+
+                `<span style="color:#444"> ~${ws.intervalStr} · <span style="color:${confColor}">${ws.confidence}%</span></span><br>`+
+                `${nums}<br>`+
+                `<span style="color:${TCOL[ws.trend]};font-size:8px">${TREND[ws.trend]}</span>`+
+                `<span style="color:${cvColor};font-size:8px"> · ${cvLabel}</span></span>`;
+        } else {
+            const liveFreq=new Array(37).fill(0);
+            spinHistory.forEach(n=>liveFreq[n]++);
+            const liveW=len>0?len:1;
+            const hs=[];
+            for(let n=0;n<=36;n++){
+                const hN=(BASE_FREQ[n]/BASE_TOTAL)*37;
+                const lN=(liveFreq[n]/liveW)*37;
+                hs.push({num:n,score:(hN*0.5)+(lN*(len>=10?0.5:0.2))});
+            }
+            hs.sort((a,b)=>b.score-a.score);
+            const top5 = hs.slice(0,5).sort((a,b) => a.num - b.num);
+            const nums = top5.map(s => {
+                const col=RED_NUMBERS.includes(s.num)?'#ff5252':s.num===0?'#69f0ae':'#ccc';
+                return `<span style="color:${col};font-weight:bold">${s.num}</span>`;
+            }).join('<span style="color:#333;margin:0 2px">·</span>');
+            const need=ws.remaining>0?`⏱️ Need ${ws.remaining} more`:'🔥 Hot';
+            document.getElementById('dealer-sig').innerHTML=
+                `<span style="font-size:9px;color:#555">${need}</span><br>${nums}`;
         }
-        hotScores.sort((a, b) => b.score - a.score);
-
-        // Top 5 hot numbers (exclude 0 unless genuinely very hot)
-        const top5 = hotScores.filter(s => s.num !== 0 || s.score > 1.5).slice(0, 5);
-        const top5Nums = top5.map(s => {
-            const col = RED_NUMBERS.includes(s.num) ? '#ff5252' : s.num === 0 ? '#69f0ae' : '#ccc';
-            const hits = liveFreq[s.num] > 0 ? `<span style="font-size:8px;color:#888;margin-left:1px;">x${liveFreq[s.num]}</span>` : '';
-            return `<span style="color:${col};font-weight:bold">${s.num}${hits}</span>`;
-        }).join('<span style="color:#444;margin:0 2px;">·</span>');
-
-        const label = len >= 10 ? 'Hot Numbers 🔥' : 'Base Bias';
-        document.getElementById('dealer-sig').innerHTML =
-            `<span style="font-size:11px;line-height:1.6">`+
-            `<span style="color:#aaa;font-size:10px">${label}:</span><br>${top5Nums}</span>`;
     }
-
 
     // ---- 5. Progress Bars ----
     let r30=spinHistory.slice(-30);
-    let r=0,bl=0,d1_=0,d2_=0,d3_=0,nz=0;
-    r30.forEach(n=>{if(n===0)return;nz++;RED_NUMBERS.includes(n)?r++:bl++;if(n<=12)d1_++;else if(n<=24)d2_++;else d3_++;});
-    updateBar('red','black',r,bl,nz);
+    let r=0,bl2=0,d1_=0,d2_=0,d3_=0,nz=0;
+    r30.forEach(n=>{if(n===0)return;nz++;RED_NUMBERS.includes(n)?r++:bl2++;if(n<=12)d1_++;else if(n<=24)d2_++;else d3_++;});
+    updateBar('red','black',r,bl2,nz);
     if(nz>0){
         let pd1=Math.round((d1_/nz)*100),pd2=Math.round((d2_/nz)*100);
         document.getElementById('pct-d1').innerText=`${pd1}%`;
@@ -692,23 +846,49 @@ function runAnalyticsAndBetting(){
         document.getElementById('bar-d3').style.width=`${100-pd1-pd2}%`;
     }
 
-    // ---- 6. PnL Chart ----
-    let bHist=calculatePnL(spinHistory);
-    let bal=bHist[bHist.length-1]||0;
-    // Update consecutive losses tracking for display
+    // ---- 6. Loss tracking ----
     if(spinHistory.length>=2){
-        // Detect last bet result
-        const recentBet=getBestBetSimple(spinHistory.slice(0,-1),consecutiveLosses);
-        if(recentBet){
-            const lastActual=spinHistory[spinHistory.length-1];
-            if(satisfiesBet(lastActual,recentBet)){consecutiveLosses=0;}
-            else{consecutiveLosses++;}
+        const rb=getBestBetSimple(spinHistory.slice(0,-1),consecutiveLosses);
+        if(rb){
+            const la=spinHistory[spinHistory.length-1];
+            if(satisfiesBet(la,rb)){consecutiveLosses=0;betLossCount=0;}
+            else{consecutiveLosses++;betLossCount++;if(consecutiveLosses>=5)consecutiveLosses=0;}
         }
     }
-    let balEl=document.getElementById('balance-display');
-    balEl.innerText=`${bal>0?'+':''}${bal} Pts`;
-    balEl.style.color=bal>=0?'#69f0ae':'#ff5252';
-    renderChart(bHist);
+
+    // ---- 7. Mini P&L (text only, no chart) ----
+    const bHist=calculatePnL(spinHistory);
+    const bal=Math.round(bHist[bHist.length-1]||0);
+    const mp=document.getElementById('mini-pnl');
+    if(mp){
+        mp.innerText=`${bal>0?'+':''}${bal} Pts`;
+        mp.className='mini-pnl'+(bal>0?' profit':bal<0?' loss':'');
+    }
+
+    // ---- 8. Top 3 Numbers (bottom secondary panel) ----
+    const topNums=computeTopNumbers(spinHistory);
+    const betThresh=isAggressive?45:65;
+    for(let i=1;i<=3;i++){
+        const pick=topNums[i-1];
+        const el=document.getElementById(`pred-${i}`);
+        const box=document.getElementById(`box-pred-${i}`);
+        const be=document.getElementById(`bet-${i}`);
+        if(!el||!box||!be) continue;
+        el.innerHTML=`${pick.num}`;
+        el.className=`mini-val ${getTextColorClass(pick.num)}`;
+        const conf=pick.confidence;
+        if(conf>=betThresh){
+            be.innerHTML=`🔥 ${conf}%`;
+            be.className='mini-bet hot';
+            box.classList.add('active-bet');
+            if(conf>=75)box.classList.add('highly-confident-bet');
+            else box.classList.remove('highly-confident-bet');
+        } else {
+            be.innerHTML=`${conf}%`;
+            be.className='mini-bet';
+            box.classList.remove('active-bet','highly-confident-bet');
+        }
+    }
 
     fetchMLUpdate();
 }
@@ -717,33 +897,44 @@ function runAnalyticsAndBetting(){
 // ML BACKEND
 // ============================================================
 async function fetchMLUpdate(){
+    if(spinHistory.length < 5) return;
     try{
-        let res=await fetch(`http://${serverIP}:5000/predict`,{
+        const res=await fetch(`http://${serverIP}:5000/predict`,{
             method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({spins:spinHistory})
         });
         if(res.ok){
-            updateServerStatus('Online','online');
-            let data=await res.json();
+            const data=await res.json();
             if(data.status==='success'){
-                let top3=data.predictions;
+                const top3=data.predictions;
+                const betThreshML=isAggressive?45:65;
+                const mlShouldBet=data.confidence>betThreshML;
                 for(let i=1;i<=3;i++){
-                    let el=document.getElementById(`pred-${i}`);
-                    let num=top3[i-1];
-                    el.innerHTML=`${num} <span style="font-size:10px;color:#00e5ff">🤖ML</span>`;
-                    el.className=`val ${getTextColorClass(num)}`;
-                    let box=document.getElementById(`box-pred-${i}`);
-                    let betEl=document.getElementById(`bet-${i}`);
-                    const betThreshML = isAggressive ? 45 : 65;
-                    if(data.confidence > betThreshML){betEl.innerHTML=`Bet ${BASE_UNIT} Pts`;betEl.className='bet-amt hot';box.classList.add('active-bet');}
-                    else{betEl.innerHTML='Wait';betEl.className='bet-amt';box.classList.remove('active-bet','highly-confident-bet');}
+                    const el=document.getElementById(`pred-${i}`);
+                    const num=top3[i-1];
+                    if(num===undefined||num===null||!el) continue;
+                    el.innerHTML=`${num} <span style="font-size:8px;color:#00e5ff">🤖</span>`;
+                    el.className=`mini-val ${getTextColorClass(num)}`;
+                    const box=document.getElementById(`box-pred-${i}`);
+                    const betEl=document.getElementById(`bet-${i}`);
+                    if(!box||!betEl) continue;
+                    if(mlShouldBet){
+                        betEl.innerHTML=`🤖 ${data.confidence.toFixed(0)}%`;
+                        betEl.className='mini-bet hot';
+                        box.classList.add('active-bet');
+                        if(data.confidence>=75)box.classList.add('highly-confident-bet');
+                        else box.classList.remove('highly-confident-bet');
+                    } else {
+                        betEl.innerHTML=`${data.confidence.toFixed(0)}%`;
+                        betEl.className='mini-bet';
+                        box.classList.remove('active-bet','highly-confident-bet');
+                    }
                 }
-                // Bug fix: do NOT overwrite dealer-sig — that's the Wheel Bias track numbers.
-                // Show ML engine name in server status bar instead.
-                updateServerStatus(`ML: ${data.model.substring(0,18)}`, 'online');
-            }
-        } else{updateServerStatus('Offline','offline');}
-    }catch(e){updateServerStatus('Offline','offline');}
+                const sigColor=data.signal==='HIGH'?'#69f0ae':data.signal==='GOOD'?'#ffd700':data.signal==='LOW'?'#ff9800':'#ff5252';
+                updateServerStatus(`🤖 ${data.signal} (${data.confidence.toFixed(0)}%)`,'online');
+            } else if(data.error){ updateServerStatus('ML: Error','offline'); }
+        } else { updateServerStatus('Offline','offline'); }
+    }catch(e){ updateServerStatus('Offline','offline'); }
 }
 
 init();
