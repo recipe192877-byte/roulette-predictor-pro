@@ -5,9 +5,7 @@ import warnings
 import math
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.neural_network import MLPClassifier
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.neural_network import MLPClassifier
 from xgboost import XGBClassifier
 import lightgbm as lgb
@@ -68,6 +66,10 @@ def get_features(spin_history):
         dist_prev = 0
         if i > 0:
             dist_prev = get_wheel_distance(spin_history[i], spin_history[i-1])
+
+        dist_prev2 = 0
+        if i > 1:
+            dist_prev2 = get_wheel_distance(spin_history[i], spin_history[i-2])
             
         sector = get_sector(val)
         
@@ -91,7 +93,7 @@ def get_features(spin_history):
         # Distance directly to the Zero Pocket
         dist_to_zero = get_wheel_distance(val, 0)
             
-        features.append([val, is_red, is_even, dozen, col, dist_prev, sector, delay, roll_avg, streak, dist_to_zero])
+        features.append([val, is_red, is_even, dozen, col, dist_prev, dist_prev2, sector, delay, roll_avg, streak, dist_to_zero])
     return np.array(features)
 
 def calculate_math_scores(spins):
@@ -108,6 +110,14 @@ def calculate_math_scores(spins):
     
     # 1. Markov Chain Transition Matrix
     transition_weights = {i: 0.0 for i in range(37)}
+    
+    # Tri-gram Markov (Pattern of 3)
+    if len(spins) >= 3:
+        for j in range(len(spins)-2):
+            if spins[j] == prev_num and spins[j+1] == last_num:
+                target = spins[j+2]
+                transition_weights[target] += 12.0
+                
     if len(spins) >= 2:
         for j in range(len(spins)-1):
             if spins[j] == last_num:
@@ -182,7 +192,7 @@ def predict():
         
         # 2. Strict ML Online Learning Phase
         if len(spins) >= 15:
-            model_used = "Deep_Hybrid_AI (LGBM+XGB+RF+MLP)"
+            model_used = "Deep_Hybrid_AI (LGBM+XGB+RF+MLP+GB)"
             try:
                 X = get_features(spins)
                 X_train = X[:-1]
@@ -192,7 +202,7 @@ def predict():
                     rf = RandomForestClassifier(n_estimators=150, random_state=42, max_depth=5, min_samples_leaf=1)
                     rf.fit(X_train, y_train)
                     
-                    # XGB and LGBM require 0-N indexing
+                    # XGB, LGBM, and GB require 0-N indexing
                     le = LabelEncoder()
                     y_train_encoded = le.fit_transform(y_train)
                     
@@ -214,6 +224,9 @@ def predict():
                     lgbm = lgb.LGBMClassifier(n_estimators=100, max_depth=3, learning_rate=0.08, random_state=42, verbose=-1, min_child_samples=2)
                     lgbm.fit(X_train, y_train_encoded)
                     
+                    gb = GradientBoostingClassifier(n_estimators=100, learning_rate=0.08, max_depth=3, random_state=42)
+                    gb.fit(X_train, y_train_encoded)
+                    
                     # Target Feature row: predicting using LAST spin's state
                     X_test = X[-1].reshape(1, -1)
                     
@@ -221,20 +234,25 @@ def predict():
                     xgb_probs = xgb.predict_proba(X_test)[0]
                     mlp_probs = mlp.predict_proba(X_test)[0]
                     lgbm_probs = lgbm.predict_proba(X_test)[0]
+                    gb_probs = gb.predict_proba(X_test)[0]
                     
                     for idx, cls in enumerate(rf.classes_):
-                        final_probs[cls] += rf_probs[idx] * 0.15  # 15% RF Weight
+                        final_probs[cls] += rf_probs[idx] * 0.12  # 12% RF
                         
                     for idx, enc_cls in enumerate(xgb.classes_):
                         real_cls = le.classes_[enc_cls]
-                        final_probs[real_cls] += xgb_probs[idx] * 0.15  # 15% XGB Weight
+                        final_probs[real_cls] += xgb_probs[idx] * 0.12  # 12% XGB 
 
                     for idx, cls in enumerate(mlp.classes_):
-                        final_probs[cls] += mlp_probs[idx] * 0.15  # 15% MLP Weight
+                        final_probs[cls] += mlp_probs[idx] * 0.12  # 12% MLP
                         
                     for idx, enc_cls in enumerate(lgbm.classes_):
                         real_cls = le.classes_[enc_cls]
-                        final_probs[real_cls] += lgbm_probs[idx] * 0.15  # 15% LGBM Weight
+                        final_probs[real_cls] += lgbm_probs[idx] * 0.12  # 12% LGBM
+                        
+                    for idx, enc_cls in enumerate(gb.classes_):
+                        real_cls = le.classes_[enc_cls]
+                        final_probs[real_cls] += gb_probs[idx] * 0.12  # 12% GB
                         
                     confidence_multiplier = 2.8 
             except Exception as ml_e:

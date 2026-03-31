@@ -257,7 +257,7 @@ function getBestBet(historySlice) {
     const THRESH_H = isAggressive ? 1.6 : 2.2;
     const outCands=[
         {label:'RED',  pred:"<span class='text-red'>Play RED</span>",  hits:r,payout:2},
-        {label:'BLK',  pred:"Play BLACK",                               hits:b,payout:2},
+        {label:'BLK',  pred:"<span class='text-black'>Play BLACK</span>", hits:b,payout:2},
         {label:'EVEN', pred:"<span class='text-gold'>Play EVEN</span>", hits:e,payout:2},
         {label:'ODD',  pred:"<span class='text-gold'>Play ODD</span>",  hits:o,payout:2},
         {label:'LOW',  pred:"<span class='text-blue'>Play 1-18</span>", hits:l,payout:2},
@@ -274,7 +274,7 @@ function getBestBet(historySlice) {
     last5.forEach(n=>{if(n===0)return;RED_NUMBERS.includes(n)?r5++:b5++;n%2===0?e5++:o5++;n<=18?l5++:h5++;});
     const streakMap=[
         {hits:r5,pred:"<span class='text-red'>Play RED</span>",label:'RED',payout:2},
-        {hits:b5,pred:"Play BLACK",label:'BLK',payout:2},
+        {hits:b5,pred:"<span class='text-black'>Play BLACK</span>",label:'BLK',payout:2},
         {hits:e5,pred:"<span class='text-gold'>Play EVEN</span>",label:'EVEN',payout:2},
         {hits:o5,pred:"<span class='text-gold'>Play ODD</span>",label:'ODD',payout:2},
     ];
@@ -539,7 +539,8 @@ function computeWheelSpeedData() {
                 sumXY += i * recent[i];
                 sumX2 += i * i;
             }
-            const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+            const denominator = (n * sumX2 - sumX * sumX);
+            const slope = denominator === 0 ? 0 : (n * sumXY - sumX * sumY) / denominator;
             // Slope > 0.6 seconds/spin means interval is growing -> SLOWING
             if(slope > 0.6)       trend = 'SLOWING';
             else if(slope < -0.6) trend = 'SPEEDING';
@@ -945,6 +946,26 @@ async function fetchMLUpdate(){
                 }
                 const sigColor=data.signal==='HIGH'?'#69f0ae':data.signal==='GOOD'?'#ffd700':data.signal==='LOW'?'#ff9800':'#ff5252';
                 updateServerStatus(`🤖 ${data.signal} (${data.confidence.toFixed(0)}%)`,'online');
+                
+                // ML Overdrive - Override Main Bet Card if confidence > 85
+                if (data.confidence >= 85) {
+                    const bc = document.getElementById('main-bet-card');
+                    const bl = document.getElementById('main-bet-label');
+                    const bf = document.getElementById('main-bet-footer');
+                    const bg = document.getElementById('main-bet-badge');
+                    
+                    if (bc && !bc.className.includes('circuit-break')) {
+                        bc.className = 'main-bet-card glass has-signal highly-confident-bet';
+                        bc.style.border = '2px solid #69f0ae';
+                        bc.style.boxShadow = '0 0 20px rgba(105, 240, 174, 0.4)';
+                        bl.innerHTML = `🔥 Number <b>${top3[0]}</b> 🔥`;
+                        bl.style.color = '#69f0ae';
+                        bl.style.fontSize = '2.5rem';
+                        if (bf) bf.innerHTML = `<span class="mbc-strength" style="color:#69f0ae;font-weight:bold">🤖 ML OVERDRIVE ACTIVE (35:1)</span>`;
+                        if (bg) { bg.innerText = '🤖 Deep AI'; bg.style.color = '#69f0ae'; bg.style.borderColor = '#69f0ae'; }
+                    }
+                }
+                
             } else if(data.error){ updateServerStatus('ML: Error','offline'); }
         } else { updateServerStatus('Offline','offline'); }
     }catch(e){ updateServerStatus('Offline','offline'); }
