@@ -54,6 +54,7 @@ for(let i=0;i<HISTORICAL_SPIN_DATA.length-1;i++)
 let spinHistory = [];
 const MAX_HISTORY = 500;
 let isAggressive = false;
+let _cachedWheelSpeed = null; // v7.0: cached per-spin to avoid double computation
 let progMode = 'FLAT'; // Default to FLAT for safety
 let serverIP = localStorage.getItem('rppro_server_ip') || 'localhost';
 const BASE_UNIT = 10;
@@ -147,6 +148,18 @@ function computeTopNumbers(liveHistory) {
         return combined;
     };
 
+    // *** v7.0 INTEGRATION: Use cached wheel speed physics predictions ***
+    let wsScores = new Array(37).fill(0);
+    let wsValid = false;
+    if (_cachedWheelSpeed && _cachedWheelSpeed.valid && _cachedWheelSpeed.topNumbers) {
+        wsValid = true;
+        const wsMax = _cachedWheelSpeed.topNumbers[0]?.score || 1;
+        _cachedWheelSpeed.topNumbers.forEach((item, rank) => {
+            // Exponential decay by rank: top pick gets massive boost
+            wsScores[item.num] = (item.score / wsMax) * Math.exp(-rank * 0.35);
+        });
+    }
+
     const scores=[];
     for(let n=0;n<=36;n++){
         // L1: Historical baseline (reduced to prevent watering down live data)
@@ -199,7 +212,12 @@ function computeTopNumbers(liveHistory) {
         }
         const L5=sector*2.5;
 
-        scores.push({num:n,score:L1+L2+L3+L4+L5});
+        // L6: v7.0 QUANTUM NEXUS PHYSICS ENGINE (13-model ensemble)
+        // This layer pulls from: Monte Carlo, Particle Filter, Von Mises,
+        // Kalman Filter, Wavelet, N-Gram, Granger, Drift Correction, etc.
+        const L6 = wsValid ? wsScores[n] * 4.0 : 0;
+
+        scores.push({num:n,score:L1+L2+L3+L4+L5+L6});
     }
     const maxS=Math.max(...scores.map(s=>s.score));
     const minS=Math.min(...scores.map(s=>s.score));
@@ -1877,9 +1895,10 @@ function runAnalyticsAndBetting(){
     }
     document.getElementById('streak-alert').innerHTML=stText;
 
-    // ---- 4. Wheel Speed Analysis ----
+    // ---- 4. Wheel Speed Analysis (compute ONCE, cache for top numbers) ----
     {
-        const ws=computeWheelSpeedData();
+        _cachedWheelSpeed = computeWheelSpeedData();
+        const ws = _cachedWheelSpeed;
         if(ws.valid){
             const ICONS ={FAST:'⚡',MEDIUM:'🌀',SLOW:'🐢'};
             const COLS  ={FAST:'#ff9800',MEDIUM:'#ffd700',SLOW:'#69f0ae'};
