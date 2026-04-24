@@ -298,7 +298,4 @@ def heal():
     return jsonify({"status": "Heal scan initiated in background"})
 
 if __name__ == '__main__':
-    def silent_callback(msg):
-        print(msg)
-    healer.run_daily_maintenance(['app.py'], silent_callback, force=False)
     app.run(host='0.0.0.0', port=5000, debug=False)
