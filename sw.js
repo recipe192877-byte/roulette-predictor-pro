@@ -1,9 +1,9 @@
-const CACHE_NAME = 'roulette-pro-v3';
+const CACHE_NAME = 'roulette-pro-v4';
 const ASSETS = [
     './',
     './index.html',
-    './style.css?v=2',
-    './roulette_engine.js?v=2',
+    './style.css?v=5',
+    './roulette_engine.js?v=5',
     './manifest.json',
     './icon-192.svg'
 ];

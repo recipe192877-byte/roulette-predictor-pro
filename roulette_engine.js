@@ -102,6 +102,8 @@ function init() {
         updateProgUI(); updateApp();
     });
     initVoice();
+    pollServerStatus();
+    setInterval(pollServerStatus, 5000);
     updateApp();
 }
 
@@ -120,6 +122,29 @@ function updateServerStatus(text,cls){
     document.getElementById('status-text').innerText=text;
     let dot=document.getElementById('status-dot');
     if(dot) dot.className='status-dot '+cls;
+}
+
+// ============================================================
+// SERVER ONLINE STATUS POLLER
+// ============================================================
+async function pollServerStatus() {
+    try {
+        const res = await fetch(`http://${serverIP}:5000/status`);
+        if(res.ok) {
+            const data = await res.json();
+            if(data.status === 'online') {
+                const currentText = document.getElementById('status-text').innerText;
+                if(currentText === 'Offline' || currentText === 'Connecting...' || currentText === 'ML: Error') {
+                    updateServerStatus('Online', 'online');
+                    if (spinHistory.length >= 5) fetchMLUpdate();
+                }
+            }
+        } else {
+            updateServerStatus('Offline', 'offline');
+        }
+    } catch(e) {
+        updateServerStatus('Offline', 'offline');
+    }
 }
 
 // ============================================================
