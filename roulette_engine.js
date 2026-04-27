@@ -85,19 +85,6 @@ function init() {
         if(confirm("Clear all history?")) { spinHistory=[]; spinTimestamps=[]; consecutiveLosses=0; betLossCount=0; saveState(); updateApp(); }
     });
     document.getElementById('btn-refresh').addEventListener('click', () => location.reload());
-    document.getElementById('btn-heal').addEventListener('click', async () => {
-        try {
-            const btn = document.getElementById('btn-heal');
-            btn.innerText = '⏳';
-            const response = await fetch(`${SERVER_URL}/heal`, { method: 'POST' });
-            const data = await response.json();
-            alert(data.status || "Heal scan initiated.");
-            btn.innerText = '🛠️';
-        } catch (e) {
-            alert('Failed to connect to backend for healing.');
-            document.getElementById('btn-heal').innerText = '🛠️';
-        }
-    });
     document.getElementById('server-status').addEventListener('click', () => {
         let ip = prompt("Enter Server IP:", serverIP);
         if(ip && ip.trim()) { serverIP=ip.trim(); localStorage.setItem('rppro_server_ip',serverIP); updateServerStatus('Connecting...',''); fetchMLUpdate(); }
