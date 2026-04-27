@@ -10,14 +10,12 @@ from sklearn.neural_network import MLPClassifier
 from xgboost import XGBClassifier
 import lightgbm as lgb
 from sklearn.preprocessing import LabelEncoder
-from auto_healer import AutoHealer
 
 warnings.filterwarnings("ignore")
 
 app = Flask(__name__)
 CORS(app)
 
-healer = AutoHealer()
 
 ROULETTE_NUMBERS = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 RED_NUMBERS = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]
@@ -289,13 +287,6 @@ def predict():
 @app.route('/status', methods=['GET'])
 def status():
     return jsonify({"status": "online"})
-
-@app.route('/heal', methods=['POST'])
-def heal():
-    def dummy_callback(msg):
-        print(msg)
-    healer.run_daily_maintenance(['app.py'], dummy_callback, force=True)
-    return jsonify({"status": "Heal scan initiated in background"})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
